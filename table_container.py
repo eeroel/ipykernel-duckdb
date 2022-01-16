@@ -26,6 +26,10 @@ E = KeyPressEvent
 
 class TableContainer:
     """
+    Goals for this:
+    1. MVP: neatly laid out columns, table can be scrolled, and only visible data is fetched from source
+    2. Sortable columns, but that will be mainly necessary if there's some query functionality to go with it...
+
     :param floats: List of extra Float objects to display.
     :param menu_items: List of `MenuItem` objects.
     """
@@ -72,12 +76,12 @@ class TableContainer:
         )
 
     def _show_header(self):
-        return '\t'.join(self.header)
+        return '     '.join(self.header)
 
     def _show_table(self):
         result = []
         for row in self.table:
-            result += ['\t'.join(row)]
+            result += ['     '.join(row)]
         return '\n'.join(result)
 
 

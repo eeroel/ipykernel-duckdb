@@ -8,25 +8,28 @@ import pandas as pd
 from pathlib import Path
 import glob
 import sys
-
+from functools import partial
 from types import SimpleNamespace
+
 
 from ipykernel.ipkernel import IPythonKernel
 
 # 
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit import Application
-from prompt_toolkit.buffer import Buffer
-from prompt_toolkit.layout.containers import VSplit, Window
-from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.layout import Layout
 
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit import Application
 from prompt_toolkit.buffer import Buffer
-from prompt_toolkit.layout.containers import VSplit, Window
+from prompt_toolkit.layout.containers import VSplit, HSplit, Window, FloatContainer, Float
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.layout import Layout
+from prompt_toolkit.widgets import MenuContainer, MenuItem
+
+
+from table_container import TableContainer
+
 
 class Kernel(IPythonKernel):
     def __init__(self, **kwargs):
@@ -85,35 +88,64 @@ def exit_(event):
     event.app.exit()
 
 
+def show_table(table_name, db, component):
+    pd.set_option("max_rows", None)
+    df=db.view(table_name).df()
+
+    component.header = list(df.columns)
+    component.table = (list(x[1]) for x in df.astype(str).iterrows())
+    return
         
 
 def main():
-    ## Initialize state that will be available from within the kernel
+    """
+    Launch a Data Science IPython kernel with
+    - duckdb database with views to CSV files, and the db queryable in the kernel
+    - A database explorer terminal UI
+    - TODO: Python and sql autocompletion where appropriate
+    - TODO?: SQL magic to simplify `db.query(...` calls?
+
+    The database explorer could also be used by itself (but kernel handles most interaction for now)
+    """
+    ## db and tables will be available in the kernel
     db, tables = init_db()
-    table_list = ", ".join(list([x for x in tables.__dict__.keys()]))
 
+    # dataframe with tables and column names
+    col_table=db.query("select t.table_name, c.column_name from INFORMATION_SCHEMA.tables t join INFORMATION_SCHEMA.columns c on t.table_name=c.table_name").df()
 
+    main_window = Window()
+    table_window = Window()
+    table_view = TableContainer(body=table_window, header = ['foo','bar'], table = (x for x in [['1','2'],['3','4']]))
 
-    ## create UI; TODO: database explorer
+    ## construct database explorer ui
+
+    # TODO: how to refresh these when files are updated?
+    menu_items=(
+        [ MenuItem(
+            text="Tables",
+            children=[
+                MenuItem(text=x, handler=partial(show_table, x, db=db, component=table_view), children = [ MenuItem(text=y) for y in col_table.loc[lambda tbl: tbl.table_name==x].column_name.unique()])
+                for x in col_table.table_name.unique()
+        ])]
+    )
+
+    # TODO: create a custom MenuContainer with
+    # - VSplit instead of floats
+    # - Only one submenu thingy
     root_container = VSplit([
-    # One window that holds the BufferControl with the default buffer on
-    # the left.
-    Window(content=BufferControl(buffer=Buffer())),
-    Window(width=1, char='|'),
-    Window(content=FormattedTextControl(text=table_list)),
+        MenuContainer(body=main_window, menu_items=menu_items),
+        table_view
     ])
+
     layout = Layout(root_container)
     tui = Application(key_bindings=kb, layout=layout, full_screen=True)
-
-
-
 
     # create kernel with asyncio ui support
     from ipykernel.kernelapp import IPKernelApp
     app = IPKernelApp.instance(kernel_class=Kernel)
     app.initialize(["-f","foo.json","--gui", "asyncio"])
     
-    # imitating ipykernel.embed
+    # set up the relevant variables to pass to the embedded kernel; imitating ipykernel.embed here
     f = sys._getframe(0)
     global_ns = f.f_globals
     module = sys.modules[global_ns['__name__']]
@@ -122,6 +154,7 @@ def main():
     app.shell.set_completer_frame()
 
     # hack from https://github.com/ipython/ipykernel/issues/319#issuecomment-661951992
+    # otherwais complains about ioloop missing
     ipykernel.kernelbase.Kernel.start(app.kernel)
 
     # looks like this will start the kernel event loop also
