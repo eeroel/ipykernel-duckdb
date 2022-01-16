@@ -28,7 +28,7 @@ from prompt_toolkit.layout.layout import Layout
 from prompt_toolkit.widgets import MenuContainer, MenuItem
 
 
-from table_container import TableContainer
+from table_control import TableControl
 
 
 class Kernel(IPythonKernel):
@@ -114,8 +114,7 @@ def main():
     col_table=db.query("select t.table_name, c.column_name from INFORMATION_SCHEMA.tables t join INFORMATION_SCHEMA.columns c on t.table_name=c.table_name").df()
 
     main_window = Window()
-    table_window = Window()
-    table_view = TableContainer(body=table_window, header = ['foo','bar'], table = (x for x in [['1','2'],['3','4']]))
+    table_view = TableControl(header = ['foo','bar'], table = (x for x in [['1','2'],['3','4']]))
 
     ## construct database explorer ui
 
@@ -134,7 +133,7 @@ def main():
     # - Only one submenu thingy
     root_container = VSplit([
         MenuContainer(body=main_window, menu_items=menu_items),
-        table_view
+        Window(table_view)
     ])
 
     layout = Layout(root_container)
