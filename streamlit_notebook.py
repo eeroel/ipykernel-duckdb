@@ -1,3 +1,6 @@
+"""
+Streamlit app: a simple database explorer on top of duckdb on top of CSV files
+"""
 import streamlit as st
 from duckdb_shell import init_db
 
