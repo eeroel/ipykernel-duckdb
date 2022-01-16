@@ -63,7 +63,7 @@ class TableControl(UIControl):
 
     def render_rows(self, tbl, style):
         tbl_text = '\n'.join(['    '.join(x) for x in tbl])
-        return to_formatted_text(tbl_text, style)
+        return to_formatted_text('    '.join(self.header), style) + to_formatted_text(tbl_text, style)
 
     def reset(self) -> None:
         self._fragments = None
@@ -154,11 +154,11 @@ class TableControl(UIControl):
         # Create content, or take it from the cache.
         key = (tuple(fragments_with_mouse_handlers), width, cursor_position)
 
-        fragment_lines_with_header = [self.render_rows([self.header], self.style)]+fragment_lines
+        fragment_lines
 
         def get_content() -> UIContent:
             return UIContent(
-                get_line=lambda i: fragment_lines_with_header[i],
+                get_line=lambda i: fragment_lines[i],
                 line_count=len(fragment_lines),
                 show_cursor=self.show_cursor,
                 cursor_position=cursor_position,

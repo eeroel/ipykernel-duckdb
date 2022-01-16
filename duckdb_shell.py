@@ -26,7 +26,7 @@ from prompt_toolkit.layout.containers import VSplit, HSplit, Window, FloatContai
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
 from prompt_toolkit.layout.layout import Layout
 from prompt_toolkit.widgets import MenuContainer, MenuItem
-
+from prompt_toolkit.application.current import get_app
 
 from table_control import TableControl
 
@@ -88,12 +88,14 @@ def exit_(event):
     event.app.exit()
 
 
-def show_table(table_name, db, component):
+def show_table(table_name, db, component, container):
     pd.set_option("max_rows", None)
     df=db.view(table_name).df()
 
     component.header = list(df.columns)
     component.table = (list(x[1]) for x in df.astype(str).iterrows())
+    # TODO: how to get this back
+    get_app().layout.focus(container)
     return
         
 
@@ -114,8 +116,8 @@ def main():
     col_table=db.query("select t.table_name, c.column_name from INFORMATION_SCHEMA.tables t join INFORMATION_SCHEMA.columns c on t.table_name=c.table_name").df()
 
     main_window = Window()
-    table_view = TableControl(header = ['foo','bar'], table = (x for x in [['1','2'],['3','4']]))
-
+    table_view = TableControl(header = ['foo','bar'], table = (x for x in [['1','2'],['3','4']]), modal=True)
+    table_window = Window(table_view)
     ## construct database explorer ui
 
     # TODO: how to refresh these when files are updated?
@@ -123,7 +125,7 @@ def main():
         [ MenuItem(
             text="Tables",
             children=[
-                MenuItem(text=x, handler=partial(show_table, x, db=db, component=table_view), children = [ MenuItem(text=y) for y in col_table.loc[lambda tbl: tbl.table_name==x].column_name.unique()])
+                MenuItem(text=x, handler=partial(show_table, x, db=db, component=table_view, container=table_window), children = [ MenuItem(text=y) for y in col_table.loc[lambda tbl: tbl.table_name==x].column_name.unique()])
                 for x in col_table.table_name.unique()
         ])]
     )
@@ -133,7 +135,7 @@ def main():
     # - Only one submenu thingy
     root_container = VSplit([
         MenuContainer(body=main_window, menu_items=menu_items),
-        Window(table_view)
+        table_window
     ])
 
     layout = Layout(root_container)
