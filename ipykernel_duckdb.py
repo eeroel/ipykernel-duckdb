@@ -179,7 +179,6 @@ def main():
     - TODO?: SQL magic to simplify `db.query(...` calls?
     - (A database explorer terminal UI)
     """
-
     ## db and tables will be available in the kernel
     db = duckdb.connect("foo2.duckdb", read_only=True)
 
