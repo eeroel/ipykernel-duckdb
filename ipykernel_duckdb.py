@@ -179,6 +179,7 @@ def main():
     - TODO?: SQL magic to simplify `db.query(...` calls?
     - (A database explorer terminal UI)
     """
+
     ## db and tables will be available in the kernel
     db = duckdb.connect("foo2.duckdb", read_only=True)
 
@@ -188,7 +189,7 @@ def main():
     # create kernel with asyncio ui support
     from ipykernel.kernelapp import IPKernelApp
     app = IPKernelApp.instance(kernel_class=IPythonDuckdbKernel)
-    app.initialize(["-f","foo.json"])
+    app.initialize(sys.argv[1:])
     
     ipykernel.kernelbase.Kernel.start(app.kernel)
 
