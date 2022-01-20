@@ -1,11 +1,11 @@
-import IPython
 import ipykernel
 from ipykernel.ipkernel import IPythonKernel
-
+from IPython.core.completer import has_open_quotes  # might as well since we depend on IPython
 
 import glob
 from pathlib import Path
 import sys
+import re
 
 from types import SimpleNamespace
 import duckdb
@@ -13,10 +13,14 @@ import duckdb
 def is_sql_block(code):
     return code.startswith(r"#%%[sql]")
 
-def detect_sql(code):
+def looks_like_sql(code):
+    after_last_quote = re.split(r'[\"\']', code)[-1]
+    return "select" in after_last_quote.lower()
+
+def detect_sql(code, cursor_pos):
     # TODO: detect being within a string and sql autocomplete therein,
     # so we can deal with any inline sql in python
-    if is_sql_block(code):
+    if is_sql_block(code) or (has_open_quotes(code[:cursor_pos]) and looks_like_sql(code[:cursor_pos])):
         return True
 
 
@@ -25,7 +29,6 @@ class IPythonDuckdbKernel(IPythonKernel):
         super().__init__(**kwargs)
 
     def get_sql_matches(self, code, cursor_pos):
-        import re
         # 1. just return the tables
         tables = list(self.col_table.table_name.unique())
         matches=tables
@@ -33,14 +36,14 @@ class IPythonDuckdbKernel(IPythonKernel):
         # 2. if in a token, get match for token instead
         token_length=0
         
-        # find previous whitespace character or period
+        # find previous whitespace character, period or comma
         until_cursor = code[:cursor_pos]
-        match = re.search('[\s\.]', until_cursor[::-1])
+        match = re.search('[\s\.\,]', until_cursor[::-1])
         if match:
             token_start = len(until_cursor)-match.end()+1
             token_length = cursor_pos-token_start
             token = code[token_start:cursor_pos]
-            r = f"^{token}"
+            r = f"^{re.escape(token)}"
 
             # TODO: handle aliases
             # so the table is determined when we have `.`
@@ -48,7 +51,7 @@ class IPythonDuckdbKernel(IPythonKernel):
             filtered_columns = list(self.col_table.loc[lambda x: x.table_name.isin(referred_tables)].column_name.unique())
 
             # first recommend column, then table
-            if code[token_start-1]=='.' or len(referred_tables)>0:
+            if len(r)>0 and (code[token_start-1] in '.,' or len(referred_tables)>0):
                 # only columns (TODO: note this assumes no schema.foo.bar syntax)
                 # TODO: we need to quote always, or when necessary(spaces in names etc.)
                 matches = [x for x in filtered_columns + tables if re.match(r, x)]
@@ -62,7 +65,7 @@ class IPythonDuckdbKernel(IPythonKernel):
         """
         ipython completion but switching to sql when detected
         """
-        if detect_sql(code):
+        if detect_sql(code, cursor_pos):
             # TODO: is there a way to pass this at startup instead?
             self.db = self.user_ns["db"]
             # TODO: shouldn't be in user_ns in the first place
