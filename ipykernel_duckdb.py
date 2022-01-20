@@ -19,7 +19,8 @@ def detect_sql(code):
     if is_sql_block(code):
         return True
 
-class Kernel(IPythonKernel):
+
+class IPythonDuckdbKernel(IPythonKernel):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
@@ -31,8 +32,8 @@ class Kernel(IPythonKernel):
 
         # 2. if in a token, get match for token instead
         token_length=0
-
-        # find previous whitespace character
+        
+        # find previous whitespace character or period
         until_cursor = code[:cursor_pos]
         match = re.search('[\s\.]', until_cursor[::-1])
         if match:
@@ -46,10 +47,12 @@ class Kernel(IPythonKernel):
             referred_tables = [x for x in tables if x in code]
             filtered_columns = list(self.col_table.loc[lambda x: x.table_name.isin(referred_tables)].column_name.unique())
 
+            # first recommend column, then table
             if code[token_start-1]=='.' or len(referred_tables)>0:
                 # only columns (TODO: note this assumes no schema.foo.bar syntax)
                 # TODO: we need to quote always, or when necessary(spaces in names etc.)
                 matches = [x for x in filtered_columns + tables if re.match(r, x)]
+            # otherwise recommend all tables first
             else:
                 matches = [x for x in tables + filtered_columns if re.match(r, x)]
         
@@ -92,20 +95,63 @@ class Kernel(IPythonKernel):
 
     def do_execute(self, code, silent, store_history=True, user_expressions=None, allow_stdin=False):
         if is_sql_block(code):
-            self.db = self.user_ns["db"]
-            # TODO: valid sql only, handle errors
-            # TODO: this should be sent as display_message?
-            output_frame = self.db.query(code.replace(r'#%%[sql]', '')).df().to_html()
-            self.execution_count += 1
+            try:
+                self.db = self.user_ns["db"]
+                # TODO: valid sql only, handle errors
+                # TODO: this should be sent as display_message?
+                from IPython.display import display
 
-            return {
-                'status': 'ok', #'ok' OR 'error' OR 'aborted'
-                'payload': list(),
-                'user_expressions': {output_frame},
-                'execution_count': self.execution_count
-            }
+                output_table = self.db.query(code.replace(r'#%%[sql]', '')).df()
+
+                from IPython.core.interactiveshell import ExecutionInfo
+                from IPython.core.interactiveshell import ExecutionResult
+
+                info = ExecutionInfo(
+                    code, store_history, silent, shell_futures=True #?
+                    )
+                result = ExecutionResult(info)
+                self.shell.displayhook.exec_result = result
+                
+                self.shell.last_execution_succeeded = True
+                self.shell.last_execution_result = result
+
+                self.shell.displayhook(output_table)
+
+                # Reset this so later displayed values do not modify the
+                # ExecutionResult
+                self.shell.displayhook.exec_result = None
+                
+                # TODO: do we need?
+                """
+                self.shell.events.trigger('post_execute')
+                if not silent:
+                    self.shell.events.trigger('post_run_cell', res)
+                """
+
+                return {
+                    'status': 'ok', #'ok' OR 'error' OR 'aborted'
+                    'payload': list(),
+                    # TODO: what are these again..?
+                    'user_expressions': {},
+                    'execution_count': self.shell.execution_count-1
+                }
+
+            except Exception as err:
+                import traceback
+                traceback.print_tb(err.__traceback__)
+
+                # TODO: is this documented..?
+                return {
+                    'status': 'error', #'ok' OR 'error' OR 'aborted'
+                    'payload': list(),
+                    'traceback': str(err.__traceback__) or [],
+                    'ename': str(type(err).__name__),
+                    'evalue': str(err),
+                    'execution_count': self.shell.execution_count-1
+                }
         else:
             return super().do_execute(code, silent, store_history, user_expressions, allow_stdin)
+
 
 def init_db():
     db = duckdb.connect("foo2.duckdb")
@@ -138,7 +184,7 @@ def main():
 
     # create kernel with asyncio ui support
     from ipykernel.kernelapp import IPKernelApp
-    app = IPKernelApp.instance(kernel_class=Kernel)
+    app = IPKernelApp.instance(kernel_class=IPythonDuckdbKernel)
     app.initialize(["-f","foo.json"])
     
     ipykernel.kernelbase.Kernel.start(app.kernel)
