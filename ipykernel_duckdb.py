@@ -175,11 +175,18 @@ def main():
     """
     Launch a Data Science IPython kernel with
     - duckdb database with views to CSV files, and the db queryable in the kernel
-    - TODO: Python and sql autocompletion where appropriate
+    - Python and sql autocompletion where appropriate
+    - TODO: support sql cells with query wrapped in quotes => becomes comment in .py file
+    - TODO: Autocompletion improvements
+    - TODO: syntax highlighting? is there anything we can do? "polyglot" kernel seems not supported; BUT: maybe best practice is to write sql in strings anyway
+    - TODO: Can we use something else than #%%[sql] as that will break vscode code cells (comment line not passed to interactive)?
+    - TODO: How to specify DB in a convenient, non-magical way? give a file-or-in-memory option as well
+    - TODO: support all file types duckdb supports (parquet etc), and allow full speccing of load + handle unsupported field names etc. if not already done
+    - TODO: How to install simply?
+    - TODO: vim plugin to replicate VScode code cell functionality
+    - TODO: tool to generate HTML automatically ("nbconvert without the nb") and refresh when cell is executed
     - TODO?: SQL magic to simplify `db.query(...` calls?
-    - (A database explorer terminal UI)
     """
-
     ## db and tables will be available in the kernel
     db = duckdb.connect("foo2.duckdb", read_only=True)
 
