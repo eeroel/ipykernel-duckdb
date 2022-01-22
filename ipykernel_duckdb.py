@@ -153,52 +153,83 @@ class IPythonDuckdbKernel(IPythonKernel):
         # => this way any code executed is also valid python code
         if self.update_db() and \
             (is_string_block(code) and (is_sql_block(code, self.sql_block_marker) or looks_like_sql(sql_code))):
+
+            """
+            Pre-execution code for the shell so history and display work correctly
+            """
+            from IPython.core.interactiveshell import ExecutionInfo
+            from IPython.core.interactiveshell import ExecutionResult
+
+            info = ExecutionInfo(code, store_history, silent, shell_futures=True)
+            result = ExecutionResult(info)
+            if silent:
+                store_history = False
+
+            if store_history:
+                result.execution_count = self.shell.execution_count
+            
+            self.shell.events.trigger('pre_execute')
+            if not silent:
+                self.shell.events.trigger('pre_run_cell', info)
+            
+            if store_history:
+                self.shell.history_manager.store_inputs(self.shell.execution_count, sql_code, code)
+                
             try:
+                """
+                Actually execute the sql
+                """
                 output_table = self.db.query(sql_code).df()
 
-                from IPython.core.interactiveshell import ExecutionInfo
-                from IPython.core.interactiveshell import ExecutionResult
-
-                info = ExecutionInfo(
-                    code, store_history, silent, shell_futures=True #?
-                    )
-                result = ExecutionResult(info)
-                self.shell.displayhook.exec_result = result
-                
-                self.shell.last_execution_succeeded = True
-                self.shell.last_execution_result = result
-
+                """
+                Display
+                """
+                self.shell.displayhook.exec_result = result               
                 self.shell.displayhook(output_table)
-
+                
+                """
+                Post-execution code
+                """
                 # Reset this so later displayed values do not modify the
                 # ExecutionResult
                 self.shell.displayhook.exec_result = None
                 
-                # TODO: do we need these?
+                self.shell.last_execution_succeeded = True
+                self.shell.last_execution_result = result
+
+                if store_history:
+                    self.shell.history_manager.store_output(self.shell.execution_count)
+                    self.shell.execution_count += 1
+                
                 self.shell.events.trigger('post_execute')
                 if not silent:
                     self.shell.events.trigger('post_run_cell', result)
-                
+                                
                 return {
                     'status': 'ok', #'ok' OR 'error' OR 'aborted'
                     'payload': list(),
                     # TODO: what are these again..?
                     'user_expressions': {},
-                    'execution_count': self.shell.execution_count  # TODO: check
+                    'execution_count': self.shell.execution_count-1
                 }
 
             except Exception as err:
                 import traceback
                 traceback.print_tb(err.__traceback__)
 
-                # TODO: is this documented..?
+                if store_history:
+                    self.shell.execution_count += 1
+                result.error_before_exec = err
+                self.shell.last_execution_succeeded = False
+                self.shell.last_execution_result = result
+
                 return {
                     'status': 'error', #'ok' OR 'error' OR 'aborted'
                     'payload': list(),
                     'traceback': str(err.__traceback__) or [],
                     'ename': str(type(err).__name__),
                     'evalue': str(err),
-                    'execution_count': self.shell.execution_count  # TODO: check
+                    'execution_count': self.shell.execution_count-1
                 }
         else:
             return super().do_execute(code, silent, store_history, user_expressions, allow_stdin)
@@ -210,8 +241,6 @@ def main():
     - Autocompletion of table and column names
     - Helper syntax for querying the database with SQL only
     - Python and sql autocompletion where appropriate
-    - TODO: fix: for some reason display is swallowed on first sql run! i.e. cell 1: create db, cell 2: run sql -> no output
-    - TODO: execution counter fix
     - TODO: support all file types duckdb supports (parquet etc), and allow full speccing of load + handle unsupported field names etc. if not already done (<- this is a separate project / utils)
     - TODO: Autocompletion improvements
     - TODO: syntax highlighting? is there anything we can do? "polyglot" kernel seems not supported; BUT: maybe best practice is to write sql in strings anyway
