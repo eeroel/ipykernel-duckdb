@@ -1,36 +1,91 @@
 import ipykernel
 from ipykernel.ipkernel import IPythonKernel
-from IPython.core.completer import has_open_quotes  # might as well since we depend on IPython
 
-import glob
-from pathlib import Path
+# TODO: reimplement as it's trivial => our sql completer code doesn't need to depend on IPython
+from IPython.core.completer import has_open_quotes
+
 import sys
 import re
 
-from types import SimpleNamespace
 import duckdb
 
-def is_sql_block(code):
-    return code.startswith(r"#%%[sql]")
+# TODO: this might be better as a method, as the block could be configurable
+def is_sql_block(code, code_block_marker):
+    return code.startswith(code_block_marker)
+
+def is_string_block(code):
+    import ast
+    # TODO: is there a better way to do this?
+    try:
+        literal = ast.literal_eval(code)
+        if isinstance(literal, str):
+            return True
+    
+    except Exception:
+        return False
+
+    return 
 
 def looks_like_sql(code):
+    """
+    Detect SELECT statement or WITH statement
+    """
     after_last_quote = re.split(r'[\"\']', code)[-1]
-    return "select" in after_last_quote.lower()
-
-def detect_sql(code, cursor_pos):
-    # TODO: detect being within a string and sql autocomplete therein,
-    # so we can deal with any inline sql in python
-    if is_sql_block(code) or (has_open_quotes(code[:cursor_pos]) and looks_like_sql(code[:cursor_pos])):
-        return True
+    lowered = after_last_quote.lower()    
+    return lowered.startswith("select") or lowered.startswith("with")
 
 
 class IPythonDuckdbKernel(IPythonKernel):
+    db = None
+    sql_block_marker=r'#%%[sql]'
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
+    def detect_sql(self, code, cursor_pos):
+        # TODO: detect being within a string and sql autocomplete therein,
+        # so we can deal with any inline sql in python
+        if is_sql_block(code, self.sql_block_marker) or (has_open_quotes(code[:cursor_pos]) and looks_like_sql(code[:cursor_pos])):
+            return True
+
+    def update_db(self):
+        """
+        Find duckdb database from user namespace
+        """
+        # TODO: for performance etc, we could first check if our current db
+        # still exists and is open, instead of going through all
+        self.db = None
+        
+        for v in self.user_ns.keys():
+            if isinstance(self.user_ns[v], duckdb.DuckDBPyConnection):
+                # check it's open as well
+                # NOTE: if the user has two db variables, one closed and one open, we
+                # may not pick up the open one
+                # TODO: any better way to check openness?
+                try:
+                    self.user_ns[v].query("select 1")  # this should fail only if closed
+                    self.db = self.user_ns[v]
+                except RuntimeError:
+                    self.db = None
+                    return False
+
+        if self.db:
+            # set up helper table
+            # TODO: don't use pandas here, so we only depend on IPython and duckdb
+            self.col_table = self.db.query("select t.table_name, c.column_name from INFORMATION_SCHEMA.tables t join INFORMATION_SCHEMA.columns c on t.table_name=c.table_name").df()
+            return True
+        else:
+            self.db = None
+            # No db, should fall back to ipython
+            return False
+
     def get_sql_matches(self, code, cursor_pos):
+        # TODO: spec this so that the matching function is more modular?
+        # - it's really just a hierarchy of schema.table.column <- work with that!
+        col_table = self.col_table
+
         # 1. just return the tables
-        tables = list(self.col_table.table_name.unique())
+        tables = list(col_table.table_name.unique())
         matches=tables
 
         # 2. if in a token, get match for token instead
@@ -48,7 +103,7 @@ class IPythonDuckdbKernel(IPythonKernel):
             # TODO: handle aliases
             # so the table is determined when we have `.`
             referred_tables = [x for x in tables if x in code]
-            filtered_columns = list(self.col_table.loc[lambda x: x.table_name.isin(referred_tables)].column_name.unique())
+            filtered_columns = list(col_table.loc[lambda x: x.table_name.isin(referred_tables)].column_name.unique())
 
             # first recommend column, then table
             if len(r)>0 and (code[token_start-1] in '.,' or len(referred_tables)>0):
@@ -61,34 +116,19 @@ class IPythonDuckdbKernel(IPythonKernel):
         
         return matches, token_length
     
+
     def do_complete(self, code, cursor_pos):
         """
         ipython completion but switching to sql when detected
         """
-        if detect_sql(code, cursor_pos):
-            # TODO: is there a way to pass this at startup instead?
-            self.db = self.user_ns["db"]
-            # TODO: shouldn't be in user_ns in the first place
-            self.col_table = self.user_ns["col_table"]
-
+        if self.update_db() and self.detect_sql(code, cursor_pos):
             matches, cursor_offset = self.get_sql_matches(code, cursor_pos)
 
             out = {
-            # status should be 'ok' unless an exception was raised during the request,
-            # in which case it should be 'error', along with the usual error message content
-            # in other messages.
             'status': 'ok',
-
-            # The list of all matches to the completion request, such as
-            # ['a.isalnum', 'a.isalpha'] for the above example.
             'matches': matches,
-
-            # The range of text that should be replaced by the above matches when a completion is accepted.
-            # typically cursor_end is the same as cursor_pos in the request.
             'cursor_start' : cursor_pos-cursor_offset,
             'cursor_end' : cursor_pos,
-
-            # Information that frontend plugins might use for extra display information about completions.
             'metadata' : {},
             }
         else:
@@ -96,15 +136,25 @@ class IPythonDuckdbKernel(IPythonKernel):
 
         return out
 
-    def do_execute(self, code, silent, store_history=True, user_expressions=None, allow_stdin=False):
-        if is_sql_block(code):
-            try:
-                self.db = self.user_ns["db"]
-                # TODO: valid sql only, handle errors
-                # TODO: this should be sent as display_message?
-                from IPython.display import display
 
-                output_table = self.db.query(code.replace(r'#%%[sql]', '')).df()
+    def do_execute(self, code, silent, store_history=True, user_expressions=None, allow_stdin=False):
+        """
+        ipython exeuction but sql in special cases
+        """
+        
+        # note: this is a bit different from "detect_sql" for autocomplete,
+        # since we also detect user intention to execute
+        # remove block marker, surrounding quotes if any, finally surrounding whitespace
+
+        # this preprocessing extracts the sql part we can then pass to duckdb
+        sql_code = code.strip().replace(self.sql_block_marker, '').strip().strip("'").strip('"').strip()
+        
+        # NOTE: as a design choice, we require the SQL code to be a string literal
+        # => this way any code executed is also valid python code
+        if self.update_db() and \
+            (is_string_block(code) and (is_sql_block(code, self.sql_block_marker) or looks_like_sql(sql_code))):
+            try:
+                output_table = self.db.query(sql_code).df()
 
                 from IPython.core.interactiveshell import ExecutionInfo
                 from IPython.core.interactiveshell import ExecutionResult
@@ -124,19 +174,17 @@ class IPythonDuckdbKernel(IPythonKernel):
                 # ExecutionResult
                 self.shell.displayhook.exec_result = None
                 
-                # TODO: do we need?
-                """
+                # TODO: do we need these?
                 self.shell.events.trigger('post_execute')
                 if not silent:
-                    self.shell.events.trigger('post_run_cell', res)
-                """
-
+                    self.shell.events.trigger('post_run_cell', result)
+                
                 return {
                     'status': 'ok', #'ok' OR 'error' OR 'aborted'
                     'payload': list(),
                     # TODO: what are these again..?
                     'user_expressions': {},
-                    'execution_count': self.shell.execution_count-1
+                    'execution_count': self.shell.execution_count  # TODO: check
                 }
 
             except Exception as err:
@@ -150,49 +198,26 @@ class IPythonDuckdbKernel(IPythonKernel):
                     'traceback': str(err.__traceback__) or [],
                     'ename': str(type(err).__name__),
                     'evalue': str(err),
-                    'execution_count': self.shell.execution_count-1
+                    'execution_count': self.shell.execution_count  # TODO: check
                 }
         else:
             return super().do_execute(code, silent, store_history, user_expressions, allow_stdin)
-
-
-def init_db():
-    db = duckdb.connect("foo2.duckdb")
-    all_files=glob.glob("data/*.csv")
-
-    for file in all_files:
-        tblname=Path(file).stem
-        db.execute(f"create view {tblname} as select * from read_csv_auto('{file}', ALL_VARCHAR=1)")
-
-    col=db.query("select t.table_name, c.column_name from INFORMATION_SCHEMA.tables t join INFORMATION_SCHEMA.columns c on t.table_name=c.table_name").df()
-    
-    # expose views as namespace; this way we can tab-autocomplete them
-    tables = SimpleNamespace(**{tb: db.view(tb) for tb in col.table_name.drop_duplicates().values})
-    return db, tables
      
 
 def main():
     """
-    Launch a Data Science IPython kernel with
-    - duckdb database with views to CSV files, and the db queryable in the kernel
+    Launch a Data Science IPython kernel that picks up a duckdb connection and provides
+    - Autocompletion of table and column names
+    - Helper syntax for querying the database with SQL only
     - Python and sql autocompletion where appropriate
-    - TODO: support sql cells with query wrapped in quotes => becomes comment in .py file
+    - TODO: fix: for some reason display is swallowed on first sql run! i.e. cell 1: create db, cell 2: run sql -> no output
+    - TODO: execution counter fix
+    - TODO: support all file types duckdb supports (parquet etc), and allow full speccing of load + handle unsupported field names etc. if not already done (<- this is a separate project / utils)
     - TODO: Autocompletion improvements
     - TODO: syntax highlighting? is there anything we can do? "polyglot" kernel seems not supported; BUT: maybe best practice is to write sql in strings anyway
     - TODO: Can we use something else than #%%[sql] as that will break vscode code cells (comment line not passed to interactive)?
-    - TODO: How to specify DB in a convenient, non-magical way? give a file-or-in-memory option as well
-    - TODO: support all file types duckdb supports (parquet etc), and allow full speccing of load + handle unsupported field names etc. if not already done
     - TODO: How to install simply?
-    - TODO: vim plugin to replicate VScode code cell functionality
-    - TODO: tool to generate HTML automatically ("nbconvert without the nb") and refresh when cell is executed
-    - TODO?: SQL magic to simplify `db.query(...` calls?
     """
-    ## db and tables will be available in the kernel
-    db = duckdb.connect("foo2.duckdb", read_only=True)
-
-    # dataframe with tables and column names
-    col_table=db.query("select t.table_name, c.column_name from INFORMATION_SCHEMA.tables t join INFORMATION_SCHEMA.columns c on t.table_name=c.table_name").df()
-
     # create kernel with asyncio ui support
     from ipykernel.kernelapp import IPKernelApp
     app = IPKernelApp.instance(kernel_class=IPythonDuckdbKernel)
@@ -200,6 +225,7 @@ def main():
     
     ipykernel.kernelbase.Kernel.start(app.kernel)
 
+    # TODO: what's the best way to do this?
     # set up the relevant variables to pass to the embedded kernel; imitating ipykernel.embed here
     f = sys._getframe(0)
     global_ns = f.f_globals
@@ -211,7 +237,6 @@ def main():
     app.start()
 
     return
-
 
 
 if __name__ == '__main__':
