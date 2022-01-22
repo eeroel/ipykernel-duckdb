@@ -1,15 +1,23 @@
 import ipykernel
 from ipykernel.ipkernel import IPythonKernel
 
-# TODO: reimplement as it's trivial => our sql completer code doesn't need to depend on IPython
-from IPython.core.completer import has_open_quotes
-
 import sys
 import re
 
 import duckdb
 
-# TODO: this might be better as a method, as the block could be configurable
+
+def has_open_quotes(s):
+    if s.count('"""') % 2:
+        return '"""'
+    # if triple-quotes were matched, then we can detect single-quote mismatch like this
+    if s.count('"') % 2:
+        return '"'
+    elif s.count("'") % 2:
+        return "'"
+    else:
+        return False
+
 def is_sql_block(code, code_block_marker):
     return code.startswith(code_block_marker)
 
@@ -30,8 +38,7 @@ def looks_like_sql(code):
     """
     Detect SELECT statement or WITH statement
     """
-    after_last_quote = re.split(r'[\"\']', code)[-1]
-    lowered = after_last_quote.lower().strip()
+    lowered = code.lower().strip()
     return lowered.startswith("select") or lowered.startswith("with")
 
 
@@ -43,7 +50,10 @@ class IPythonDuckdbKernel(IPythonKernel):
         super().__init__(**kwargs)
 
     def detect_sql(self, code, cursor_pos):
-        if is_sql_block(code, self.sql_block_marker) or (has_open_quotes(code[:cursor_pos]) and looks_like_sql(code[:cursor_pos])):
+        open_quote_char = has_open_quotes(code[:cursor_pos])
+        if open_quote_char:
+            after_last_quote = re.split(re.escape(open_quote_char), code[:cursor_pos])[-1]
+        if is_sql_block(code, self.sql_block_marker) or (open_quote_char and looks_like_sql(after_last_quote)):
             return True
 
     def update_db(self):
@@ -89,9 +99,9 @@ class IPythonDuckdbKernel(IPythonKernel):
         # 2. if in a token, get match for token instead
         token_length=0
         
-        # find previous whitespace character, period or comma
+        # find previous whitespace, period, comma, quote or open parenthesis
         until_cursor = code[:cursor_pos]
-        match = re.search('[\s\.\,]', until_cursor[::-1])
+        match = re.search(r'[\s\.\,\(,\"]', until_cursor[::-1])
         if match:
             token_start = len(until_cursor)-match.end()+1
             token_length = cursor_pos-token_start
@@ -102,7 +112,7 @@ class IPythonDuckdbKernel(IPythonKernel):
             # so the table is determined when we have `.`
             referred_tables = [x for x in tables if x in code]
             filtered_columns = list(col_table.loc[lambda x: x.table_name.isin(referred_tables)].column_name.unique())
-
+            
             # first recommend column, then table
             if len(r)>0 and (code[token_start-1] in '.,' or len(referred_tables)>0):
                 # only columns (TODO: note this assumes no schema.foo.bar syntax)
@@ -111,7 +121,15 @@ class IPythonDuckdbKernel(IPythonKernel):
             # otherwise recommend all tables first
             else:
                 matches = [x for x in tables + filtered_columns if re.match(r, x)]
-        
+            
+            # quoting:
+            # - if we're in a quote, always add end quote
+            # - otherwise if column name has non-alphanumeric characters, wrap in quotes
+            if code[token_start-1] == '"':
+                matches = [x+'"' for x in matches]
+            else:
+                quotable_chars_re = r'[\s\.\(\)\]\]]'
+                matches = [f'"{x}"' if re.search(quotable_chars_re, x) else x for x in matches]
         return matches, token_length
     
 
@@ -239,8 +257,7 @@ def main():
     - Autocompletion of table and column names
     - Helper syntax for querying the database with SQL only
     - Python and sql autocompletion where appropriate
-    - TODO: Handle quotes _within_ query, AND auto-quote field names with non-alphanumeric characters
-    - TODO: Autocompletion improvements
+    - TODO: Autocompletion improvements: table + table alias, schema detection
     - TODO: Use something else than #%%[sql] as that will break vscode code cells (comment line not passed to interactive)
     - TODO: How to install simply?
     """
