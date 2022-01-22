@@ -31,7 +31,7 @@ def looks_like_sql(code):
     Detect SELECT statement or WITH statement
     """
     after_last_quote = re.split(r'[\"\']', code)[-1]
-    lowered = after_last_quote.lower()    
+    lowered = after_last_quote.lower().strip()
     return lowered.startswith("select") or lowered.startswith("with")
 
 
