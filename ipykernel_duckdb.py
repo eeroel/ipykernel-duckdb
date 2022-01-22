@@ -241,6 +241,7 @@ def main():
     - Autocompletion of table and column names
     - Helper syntax for querying the database with SQL only
     - Python and sql autocompletion where appropriate
+    - TODO: Handle quotes _within_ query, AND auto-quote field names with non-alphanumeric characters
     - TODO: support all file types duckdb supports (parquet etc), and allow full speccing of load + handle unsupported field names etc. if not already done (<- this is a separate project / utils)
     - TODO: Autocompletion improvements
     - TODO: syntax highlighting? is there anything we can do? "polyglot" kernel seems not supported; BUT: maybe best practice is to write sql in strings anyway
