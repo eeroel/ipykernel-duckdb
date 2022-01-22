@@ -257,7 +257,7 @@ def main():
     - Autocompletion of table and column names
     - Helper syntax for querying the database with SQL only
     - Python and sql autocompletion where appropriate
-    - TODO: Autocompletion improvements: table + table alias, schema detection
+    - TODO: Autocompletion improvements: table + table alias, schema detection, keywords (SELECT * FROM duckdb_keywords() in a future version)
     - TODO: Use something else than #%%[sql] as that will break vscode code cells (comment line not passed to interactive)
     - TODO: How to install simply?
     """
