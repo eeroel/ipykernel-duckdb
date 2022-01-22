@@ -43,8 +43,6 @@ class IPythonDuckdbKernel(IPythonKernel):
         super().__init__(**kwargs)
 
     def detect_sql(self, code, cursor_pos):
-        # TODO: detect being within a string and sql autocomplete therein,
-        # so we can deal with any inline sql in python
         if is_sql_block(code, self.sql_block_marker) or (has_open_quotes(code[:cursor_pos]) and looks_like_sql(code[:cursor_pos])):
             return True
 
@@ -242,13 +240,10 @@ def main():
     - Helper syntax for querying the database with SQL only
     - Python and sql autocompletion where appropriate
     - TODO: Handle quotes _within_ query, AND auto-quote field names with non-alphanumeric characters
-    - TODO: support all file types duckdb supports (parquet etc), and allow full speccing of load + handle unsupported field names etc. if not already done (<- this is a separate project / utils)
     - TODO: Autocompletion improvements
-    - TODO: syntax highlighting? is there anything we can do? "polyglot" kernel seems not supported; BUT: maybe best practice is to write sql in strings anyway
-    - TODO: Can we use something else than #%%[sql] as that will break vscode code cells (comment line not passed to interactive)?
+    - TODO: Use something else than #%%[sql] as that will break vscode code cells (comment line not passed to interactive)
     - TODO: How to install simply?
     """
-    # create kernel with asyncio ui support
     from ipykernel.kernelapp import IPKernelApp
     app = IPKernelApp.instance(kernel_class=IPythonDuckdbKernel)
     app.initialize(sys.argv[1:])
