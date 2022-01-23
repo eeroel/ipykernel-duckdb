@@ -1,0 +1,14 @@
+{
+ "argv": [
+  "python",
+  "-m",
+  "ipykernel_duckdb",
+  "-f",
+  "{connection_file}"
+ ],
+ "display_name": "Python 3 (ipykernel-duckdb)",
+ "language": "python",
+ "metadata": {
+  "debugger": true
+ }
+}

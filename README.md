@@ -1,9 +1,15 @@
 # ipykernel-duckdb
 
-## What?
 A wrapper of IPykernel that is aware of a duckdb connection and provides
 * Autocompletion of table and column names
 * Magic/helper syntax for querying the database
+
+## Installation (from source)
+```
+git clone https://github.com/eeroel/ipykernel-duckdb.git .
+pip install .
+```
+This will install the Python module and configure a Jupyter kernel `ipykernel_duckdb`.
 
 ## Known issues
 * Also in Visual Studio Code, to get the most of autocompletion, you may want to tweak the setting "jupyter.pythonCompletionTriggerCharacters".
