@@ -1,7 +1,9 @@
 from ipykernel.ipkernel import IPythonKernel
 import re
 import duckdb
+import sys
 
+from typing import Optional, Any
 
 
 def has_open_quotes(s):
@@ -163,42 +165,69 @@ class IPythonDuckdbKernel(IPythonKernel):
         else:
             return await super().do_execute(code, silent, store_history, user_expressions, allow_stdin)
 
+    
     async def do_execute_sql(self, sql_code, code, silent, store_history=True, user_expressions=None, allow_stdin=False):
+        # Temporarily monkey patch the functionality of the ipython shell
+        # IPythonKernel's do_execute will handle async and also prepare the output dictionary
+        transform_cell_original = self.shell.transform_cell
+        run_cell_async_original = self.shell.run_cell_async
+
+        self.shell.run_cell_async = self.run_sql_cell
+        self.shell.transform_cell = lambda x: sql_code # we already extracted this, so should be ok
+
+        reply_content = await super().do_execute(code, silent, store_history, user_expressions, allow_stdin)
+
+        self.shell.run_cell_async = run_cell_async_original
+        self.shell.transform_cell = transform_cell_original
+        
+        return reply_content
+
+
+    async def run_sql_cell(
+        self,
+        raw_cell,
+        silent,
+        store_history=True,
+        shell_futures=True,
+        *,
+        transformed_cell: Optional[str] = None,
+        preprocessing_exc_tuple: Optional[Any] = None):
         # Pre-execution code for the shell so history and display work correctly
         from IPython.core.interactiveshell import ExecutionInfo
         from IPython.core.interactiveshell import ExecutionResult
 
-        info = ExecutionInfo(code, store_history, silent, shell_futures=True)
-        result = ExecutionResult(info)
-        if silent:
-            store_history = False
-
-        if store_history:
-            result.execution_count = self.shell.execution_count
-        
-        self.shell.events.trigger('pre_execute')
-        if not silent:
-            self.shell.events.trigger('pre_run_cell', info)
-        
-        if store_history:
-            self.shell.history_manager.store_inputs(self.shell.execution_count, sql_code, code)
-            
         try:
-            # Actually execute the sql
-            output_table = self.db.query(sql_code).df()
+            info = ExecutionInfo(raw_cell, store_history, silent, shell_futures)
+            result = ExecutionResult(info)
+            if silent:
+                store_history = False
+            if store_history:
+                result.execution_count = self.shell.execution_count
 
-            # Display
-            self.shell.displayhook.exec_result = result               
-            self.shell.displayhook(output_table)
+            self.shell.events.trigger('pre_execute')
+            if not silent:
+                self.shell.events.trigger('pre_run_cell', info)
+            
+            if store_history:
+                self.shell.history_manager.store_inputs(self.shell.execution_count, transformed_cell, raw_cell)
+            
+            self.shell.displayhook.exec_result = result
+            has_raised = False
+            try:
+                # Actually execute the sql
+                output_table = self.db.query(transformed_cell).df()
+
+                # Display         
+                self.shell.displayhook(output_table)
+            except Exception as e:
+                has_raised = True
+                self.shell.showtraceback()
+                result.error_before_exec = sys.exc_info()[1]
             
             # Post-execution code
-
-            # Reset this so later displayed values do not modify the
-            # ExecutionResult
-            self.shell.displayhook.exec_result = None
-            
-            self.shell.last_execution_succeeded = True
+            self.shell.last_execution_succeeded = not has_raised
             self.shell.last_execution_result = result
+            self.shell.displayhook.exec_result = None
 
             if store_history:
                 self.shell.history_manager.store_output(self.shell.execution_count)
@@ -207,34 +236,19 @@ class IPythonDuckdbKernel(IPythonKernel):
             self.shell.events.trigger('post_execute')
             if not silent:
                 self.shell.events.trigger('post_run_cell', result)
-                            
-            return {
-                'status': 'ok', #'ok' OR 'error' OR 'aborted'
-                'payload': list(),
-                # TODO: what are these again..?
-                'user_expressions': {},
-                'execution_count': self.shell.execution_count-1
-            }
+        
+        except BaseException as e:
+            # TODO: why do we have to do this here in case of KeyboardInterrupt,
+            # but InteractiveShell doesn't ?
+            self.shell.execution_count += 1
 
-        except Exception as err:
-            import traceback
-            traceback.print_tb(err.__traceback__)
+            info = ExecutionInfo(raw_cell, store_history, silent, shell_futures)
+            result = ExecutionResult(info)
+            result.error_in_exec = e
+            self.shell.showtraceback(running_compiled_code=True)
+            return result
+        return result
 
-            if store_history:
-                self.shell.execution_count += 1
-            result.error_before_exec = err
-            self.shell.last_execution_succeeded = False
-            self.shell.last_execution_result = result
-
-            return {
-                'status': 'error', #'ok' OR 'error' OR 'aborted'
-                'payload': list(),
-                'traceback': str(err.__traceback__) or [],
-                'ename': str(type(err).__name__),
-                'evalue': str(err),
-                'execution_count': self.shell.execution_count-1
-            }
-     
 
 def main():
     """
@@ -242,7 +256,6 @@ def main():
     - Autocompletion of table and column names
     - Helper syntax for querying the database with SQL only
     - Python and sql autocompletion where appropriate
-    - TODO: error handling, make sure we can abort a query
     - TODO: Autocompletion improvements: table + table alias, schema detection, keywords (SELECT * FROM duckdb_keywords() in a future version)
     - TODO: How to install simply?
     - TODO: remove any comment lines as the first thing (for code cell support etc.)
