@@ -163,9 +163,9 @@ class IPythonDuckdbKernel(IPythonKernel):
         if self.update_db() and \
             (is_string_block(code) and looks_like_sql(sql_code)):
             print("here! shouldn't here!")
-            """
-            Pre-execution code for the shell so history and display work correctly
-            """
+
+
+            # Pre-execution code for the shell so history and display work correctly
             from IPython.core.interactiveshell import ExecutionInfo
             from IPython.core.interactiveshell import ExecutionResult
 
@@ -185,20 +185,15 @@ class IPythonDuckdbKernel(IPythonKernel):
                 self.shell.history_manager.store_inputs(self.shell.execution_count, sql_code, code)
                 
             try:
-                """
-                Actually execute the sql
-                """
+                # Actually execute the sql
                 output_table = self.db.query(sql_code).df()
 
-                """
-                Display
-                """
+                # Display
                 self.shell.displayhook.exec_result = result               
                 self.shell.displayhook(output_table)
                 
-                """
-                Post-execution code
-                """
+                # Post-execution code
+
                 # Reset this so later displayed values do not modify the
                 # ExecutionResult
                 self.shell.displayhook.exec_result = None
@@ -250,6 +245,7 @@ def main():
     - Autocompletion of table and column names
     - Helper syntax for querying the database with SQL only
     - Python and sql autocompletion where appropriate
+    - TODO: error handling, make sure we can abort a query
     - TODO: Autocompletion improvements: table + table alias, schema detection, keywords (SELECT * FROM duckdb_keywords() in a future version)
     - TODO: How to install simply?
     - TODO: remove any comment lines as the first thing (for code cell support etc.)
