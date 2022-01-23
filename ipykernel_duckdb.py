@@ -3,6 +3,7 @@ import re
 import duckdb
 
 
+
 def has_open_quotes(s):
     if s.count('"""') % 2:
         return '"""'
@@ -150,11 +151,6 @@ class IPythonDuckdbKernel(IPythonKernel):
         """
         ipython execution but sql in special cases
         """
-        
-        # note: this is a bit different from "detect_sql" for autocomplete,
-        # since we also detect user intention to execute
-        # remove surrounding quotes if any, finally surrounding whitespace
-
         # this preprocessing extracts the sql part we can then pass to duckdb
         # TODO: remove Python comment lines as part of this
         sql_code = code.strip().strip("'").strip('"').strip()
@@ -163,79 +159,81 @@ class IPythonDuckdbKernel(IPythonKernel):
         # => this way any code executed is also valid python code
         if self.update_db() and \
             (is_string_block(code) and looks_like_sql(sql_code)):
-
-            # Pre-execution code for the shell so history and display work correctly
-            from IPython.core.interactiveshell import ExecutionInfo
-            from IPython.core.interactiveshell import ExecutionResult
-
-            info = ExecutionInfo(code, store_history, silent, shell_futures=True)
-            result = ExecutionResult(info)
-            if silent:
-                store_history = False
-
-            if store_history:
-                result.execution_count = self.shell.execution_count
-            
-            self.shell.events.trigger('pre_execute')
-            if not silent:
-                self.shell.events.trigger('pre_run_cell', info)
-            
-            if store_history:
-                self.shell.history_manager.store_inputs(self.shell.execution_count, sql_code, code)
-                
-            try:
-                # Actually execute the sql
-                output_table = self.db.query(sql_code).df()
-
-                # Display
-                self.shell.displayhook.exec_result = result               
-                self.shell.displayhook(output_table)
-                
-                # Post-execution code
-
-                # Reset this so later displayed values do not modify the
-                # ExecutionResult
-                self.shell.displayhook.exec_result = None
-                
-                self.shell.last_execution_succeeded = True
-                self.shell.last_execution_result = result
-
-                if store_history:
-                    self.shell.history_manager.store_output(self.shell.execution_count)
-                    self.shell.execution_count += 1
-                
-                self.shell.events.trigger('post_execute')
-                if not silent:
-                    self.shell.events.trigger('post_run_cell', result)
-                                
-                return {
-                    'status': 'ok', #'ok' OR 'error' OR 'aborted'
-                    'payload': list(),
-                    # TODO: what are these again..?
-                    'user_expressions': {},
-                    'execution_count': self.shell.execution_count-1
-                }
-
-            except Exception as err:
-                import traceback
-                traceback.print_tb(err.__traceback__)
-
-                if store_history:
-                    self.shell.execution_count += 1
-                result.error_before_exec = err
-                self.shell.last_execution_succeeded = False
-                self.shell.last_execution_result = result
-
-                return {
-                    'status': 'error', #'ok' OR 'error' OR 'aborted'
-                    'payload': list(),
-                    'traceback': str(err.__traceback__) or [],
-                    'ename': str(type(err).__name__),
-                    'evalue': str(err),
-                    'execution_count': self.shell.execution_count-1
-                }
+            return await self.do_execute_sql(sql_code, code, silent, store_history, user_expressions, allow_stdin)
         else:
             return await super().do_execute(code, silent, store_history, user_expressions, allow_stdin)
+
+    async def do_execute_sql(self, sql_code, code, silent, store_history=True, user_expressions=None, allow_stdin=False):
+        # Pre-execution code for the shell so history and display work correctly
+        from IPython.core.interactiveshell import ExecutionInfo
+        from IPython.core.interactiveshell import ExecutionResult
+
+        info = ExecutionInfo(code, store_history, silent, shell_futures=True)
+        result = ExecutionResult(info)
+        if silent:
+            store_history = False
+
+        if store_history:
+            result.execution_count = self.shell.execution_count
+        
+        self.shell.events.trigger('pre_execute')
+        if not silent:
+            self.shell.events.trigger('pre_run_cell', info)
+        
+        if store_history:
+            self.shell.history_manager.store_inputs(self.shell.execution_count, sql_code, code)
+            
+        try:
+            # Actually execute the sql
+            output_table = self.db.query(sql_code).df()
+
+            # Display
+            self.shell.displayhook.exec_result = result               
+            self.shell.displayhook(output_table)
+            
+            # Post-execution code
+
+            # Reset this so later displayed values do not modify the
+            # ExecutionResult
+            self.shell.displayhook.exec_result = None
+            
+            self.shell.last_execution_succeeded = True
+            self.shell.last_execution_result = result
+
+            if store_history:
+                self.shell.history_manager.store_output(self.shell.execution_count)
+                self.shell.execution_count += 1
+            
+            self.shell.events.trigger('post_execute')
+            if not silent:
+                self.shell.events.trigger('post_run_cell', result)
+                            
+            return {
+                'status': 'ok', #'ok' OR 'error' OR 'aborted'
+                'payload': list(),
+                # TODO: what are these again..?
+                'user_expressions': {},
+                'execution_count': self.shell.execution_count-1
+            }
+
+        except Exception as err:
+            import traceback
+            traceback.print_tb(err.__traceback__)
+
+            if store_history:
+                self.shell.execution_count += 1
+            result.error_before_exec = err
+            self.shell.last_execution_succeeded = False
+            self.shell.last_execution_result = result
+
+            return {
+                'status': 'error', #'ok' OR 'error' OR 'aborted'
+                'payload': list(),
+                'traceback': str(err.__traceback__) or [],
+                'ename': str(type(err).__name__),
+                'evalue': str(err),
+                'execution_count': self.shell.execution_count-1
+            }
      
 
 def main():
