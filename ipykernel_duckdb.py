@@ -148,7 +148,7 @@ class IPythonDuckdbKernel(IPythonKernel):
 
     async def do_execute(self, code, silent, store_history=True, user_expressions=None, allow_stdin=False):
         """
-        ipython exeuction but sql in special cases
+        ipython execution but sql in special cases
         """
         
         # note: this is a bit different from "detect_sql" for autocomplete,
@@ -156,6 +156,7 @@ class IPythonDuckdbKernel(IPythonKernel):
         # remove surrounding quotes if any, finally surrounding whitespace
 
         # this preprocessing extracts the sql part we can then pass to duckdb
+        # TODO: remove Python comment lines as part of this
         sql_code = code.strip().strip("'").strip('"').strip()
         
         # NOTE: as a design choice, we require the SQL code to be a string literal
@@ -239,7 +240,7 @@ class IPythonDuckdbKernel(IPythonKernel):
 
 def main():
     """
-    Launch a Data Science IPython kernel that picks up a duckdb connection and provides
+    Launch a Data Science IPython kernel that detects and open duckdb connection and provides
     - Autocompletion of table and column names
     - Helper syntax for querying the database with SQL only
     - Python and sql autocompletion where appropriate
