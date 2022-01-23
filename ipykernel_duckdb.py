@@ -1,9 +1,5 @@
-import ipykernel
 from ipykernel.ipkernel import IPythonKernel
-
-import sys
 import re
-
 import duckdb
 
 
@@ -18,8 +14,6 @@ def has_open_quotes(s):
     else:
         return False
 
-def is_sql_block(code, code_block_marker):
-    return code.startswith(code_block_marker)
 
 def is_string_block(code):
     import ast
@@ -44,7 +38,6 @@ def looks_like_sql(code):
 
 class IPythonDuckdbKernel(IPythonKernel):
     db = None
-    sql_block_marker=r'#%%[sql]'
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -53,7 +46,7 @@ class IPythonDuckdbKernel(IPythonKernel):
         open_quote_char = has_open_quotes(code[:cursor_pos])
         if open_quote_char:
             after_last_quote = re.split(re.escape(open_quote_char), code[:cursor_pos])[-1]
-        if is_sql_block(code, self.sql_block_marker) or (open_quote_char and looks_like_sql(after_last_quote)):
+        if open_quote_char and looks_like_sql(after_last_quote):
             return True
 
     def update_db(self):
@@ -64,22 +57,22 @@ class IPythonDuckdbKernel(IPythonKernel):
         # still exists and is open, instead of going through all
         self.db = None
         
-        for v in self.user_ns.keys():
-            if isinstance(self.user_ns[v], duckdb.DuckDBPyConnection):
+        for v in self.shell.user_ns.keys():
+            if isinstance(self.shell.user_ns[v], duckdb.DuckDBPyConnection):
                 # check it's open as well
                 # NOTE: if the user has two db variables, one closed and one open, we
                 # may not pick up the open one
                 # TODO: any better way to check openness?
                 try:
-                    self.user_ns[v].query("select 1")  # this should fail only if closed
-                    self.db = self.user_ns[v]
+                    self.shell.user_ns[v].query("select 1")  # this should fail only if closed
+                    self.db = self.shell.user_ns[v]
                 except RuntimeError:
                     self.db = None
                     return False
 
         if self.db:
             # set up helper table
-            # TODO: don't use pandas here, so we only depend on IPython and duckdb
+            # TODO: don't use pandas here, as python containers will do
             self.col_table = self.db.query("select t.table_name, c.column_name from INFORMATION_SCHEMA.tables t join INFORMATION_SCHEMA.columns c on t.table_name=c.table_name").df()
             return True
         else:
@@ -153,23 +146,23 @@ class IPythonDuckdbKernel(IPythonKernel):
         return out
 
 
-    def do_execute(self, code, silent, store_history=True, user_expressions=None, allow_stdin=False):
+    async def do_execute(self, code, silent, store_history=True, user_expressions=None, allow_stdin=False):
         """
         ipython exeuction but sql in special cases
         """
         
         # note: this is a bit different from "detect_sql" for autocomplete,
         # since we also detect user intention to execute
-        # remove block marker, surrounding quotes if any, finally surrounding whitespace
+        # remove surrounding quotes if any, finally surrounding whitespace
 
         # this preprocessing extracts the sql part we can then pass to duckdb
-        sql_code = code.strip().replace(self.sql_block_marker, '').strip().strip("'").strip('"').strip()
+        sql_code = code.strip().strip("'").strip('"').strip()
         
         # NOTE: as a design choice, we require the SQL code to be a string literal
         # => this way any code executed is also valid python code
         if self.update_db() and \
-            (is_string_block(code) and (is_sql_block(code, self.sql_block_marker) or looks_like_sql(sql_code))):
-
+            (is_string_block(code) and looks_like_sql(sql_code)):
+            print("here! shouldn't here!")
             """
             Pre-execution code for the shell so history and display work correctly
             """
@@ -248,7 +241,7 @@ class IPythonDuckdbKernel(IPythonKernel):
                     'execution_count': self.shell.execution_count-1
                 }
         else:
-            return super().do_execute(code, silent, store_history, user_expressions, allow_stdin)
+            return await super().do_execute(code, silent, store_history, user_expressions, allow_stdin)
      
 
 def main():
@@ -257,26 +250,13 @@ def main():
     - Autocompletion of table and column names
     - Helper syntax for querying the database with SQL only
     - Python and sql autocompletion where appropriate
-    - TODO: jupyter notebook cells are executed in wrong order if running all => probably history management is wrong!
     - TODO: Autocompletion improvements: table + table alias, schema detection, keywords (SELECT * FROM duckdb_keywords() in a future version)
-    - TODO: Use something else than #%%[sql] as that will break vscode code cells (comment line not passed to interactive)
     - TODO: How to install simply?
+    - TODO: remove any comment lines as the first thing (for code cell support etc.)
     """
     from ipykernel.kernelapp import IPKernelApp
     app = IPKernelApp.instance(kernel_class=IPythonDuckdbKernel)
-    app.initialize(sys.argv[1:])
-    
-    ipykernel.kernelbase.Kernel.start(app.kernel)
-
-    # TODO: what's the best way to do this?
-    # set up the relevant variables to pass to the embedded kernel; imitating ipykernel.embed here
-    f = sys._getframe(0)
-    global_ns = f.f_globals
-    module = sys.modules[global_ns['__name__']]
-    app.kernel.user_module = module
-    app.kernel.user_ns = f.f_locals
-    app.shell.set_completer_frame()
-
+    app.initialize()
     app.start()
 
     return
