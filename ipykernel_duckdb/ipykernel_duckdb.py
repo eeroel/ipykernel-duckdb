@@ -257,7 +257,6 @@ def main():
     - Helper syntax for querying the database with SQL only
     - Python and sql autocompletion where appropriate
     - TODO: Autocompletion improvements: table + table alias, schema detection, keywords (SELECT * FROM duckdb_keywords() in a future version)
-    - TODO: How to install simply?
     - TODO: remove any comment lines as the first thing (for code cell support etc.)
     """
     from ipykernel.kernelapp import IPKernelApp
