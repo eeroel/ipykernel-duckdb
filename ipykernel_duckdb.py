@@ -162,8 +162,6 @@ class IPythonDuckdbKernel(IPythonKernel):
         # => this way any code executed is also valid python code
         if self.update_db() and \
             (is_string_block(code) and looks_like_sql(sql_code)):
-            print("here! shouldn't here!")
-
 
             # Pre-execution code for the shell so history and display work correctly
             from IPython.core.interactiveshell import ExecutionInfo
