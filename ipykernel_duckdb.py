@@ -164,7 +164,7 @@ class IPythonDuckdbKernel(IPythonKernel):
             return await self.do_execute_sql(sql_code, code, silent, store_history, user_expressions, allow_stdin)
         else:
             return await super().do_execute(code, silent, store_history, user_expressions, allow_stdin)
-
+    
     
     async def do_execute_sql(self, sql_code, code, silent, store_history=True, user_expressions=None, allow_stdin=False):
         # Temporarily monkey patch the functionality of the ipython shell
@@ -246,7 +246,7 @@ class IPythonDuckdbKernel(IPythonKernel):
             result = ExecutionResult(info)
             result.error_in_exec = e
             self.shell.showtraceback(running_compiled_code=True)
-            return result
+
         return result
 
 
@@ -261,10 +261,7 @@ def main():
     - TODO: remove any comment lines as the first thing (for code cell support etc.)
     """
     from ipykernel.kernelapp import IPKernelApp
-    app = IPKernelApp.instance(kernel_class=IPythonDuckdbKernel)
-    app.initialize()
-    app.start()
-
+    IPKernelApp.launch_instance(kernel_class=IPythonDuckdbKernel)
     return
 
 
