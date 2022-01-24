@@ -84,29 +84,13 @@ class IPythonDuckdbKernel(IPythonKernel):
             return False
 
     def get_sql_matches(self, code, cursor_pos):
-        # TODO: take this as dict
+        # TODO: spec this so that the matching function is more modular?
+        # - it's really just a hierarchy of schema.table.column <- work with that!
         col_table = self.col_table
 
-        def generate_tables(df):
-            # pre-quote names if necessary
-            quotable_chars_re = r'[\s\.\(\)\]\]]'
-            out = {}
-            
-            quote_name = lambda x: f'"{x}"' if re.search(quotable_chars_re, x) else x
-            for row in df.itertuples(index=False):
-                table_name = quote_name(row.table_name)
-                if not out.get(table_name):
-                    out[table_name] = {"columns": []}
-                else:
-                    out[table_name]["columns"].append(quote_name(row.column_name))
-                    out[table_name]["columns"].append(table_name + '.' + quote_name(row.column_name))
-            
-            return out
-        
         # 1. just return the tables
-        tables = generate_tables(col_table)
-        table_names = list(tables.keys())
-        matches=table_names
+        tables = list(col_table.table_name.unique())
+        matches=tables
 
         # 2. if in a token, get match for token instead
         token_length=0
@@ -122,28 +106,26 @@ class IPythonDuckdbKernel(IPythonKernel):
 
             # TODO: handle aliases
             # so the table is determined when we have `.`
-            
-            # find all tables used so far in the query
-            # only match if we're not a subset of another table
-            table_re = lambda x: r'(^|[^a-zA-Z_]){}([^a-zA-Z_]|$)'.format(re.escape(x))
-            referred_tables = [x for x in table_names if re.search(table_re(x), code)]
-
-            filtered_columns = [x for y in tables for x in tables[y]["columns"] if y in referred_tables]
+            referred_tables = [x for x in tables if x in code]
+            filtered_columns = list(col_table.loc[lambda x: x.table_name.isin(referred_tables)].column_name.unique())
             
             # first recommend column, then table
             if len(r)>0 and (code[token_start-1] in '.,' or len(referred_tables)>0):
                 # only columns (TODO: note this assumes no schema.foo.bar syntax)
                 # TODO: we need to quote always, or when necessary(spaces in names etc.)
-                matches = [x for x in filtered_columns + table_names if re.match(r, x)]
+                matches = [x for x in filtered_columns + tables if re.match(r, x)]
             # otherwise recommend all tables first
             else:
-                matches = [x for x in table_names + filtered_columns if re.match(r, x)]
+                matches = [x for x in tables + filtered_columns if re.match(r, x)]
             
             # quoting:
             # - if we're in a quote, always add end quote
+            # - otherwise if column name has non-alphanumeric characters, wrap in quotes
             if code[token_start-1] == '"':
                 matches = [x+'"' for x in matches]
-
+            else:
+                quotable_chars_re = r'[\s\.\(\)\]\]]'
+                matches = [f'"{x}"' if re.search(quotable_chars_re, x) else x for x in matches]
         return matches, token_length
     
 
@@ -275,6 +257,7 @@ def main():
     - Helper syntax for querying the database with SQL only
     - Python and sql autocompletion where appropriate
     - TODO: Autocompletion improvements: table + table alias, schema detection, keywords (SELECT * FROM duckdb_keywords() in a future version)
+    - TODO: How to install simply?
     - TODO: remove any comment lines as the first thing (for code cell support etc.)
     """
     from ipykernel.kernelapp import IPKernelApp
