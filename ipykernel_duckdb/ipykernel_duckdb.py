@@ -117,6 +117,7 @@ class IPythonDuckdbKernel(IPythonKernel):
         
         # find previous whitespace, period, comma, quote or open parenthesis
         until_cursor = code[:cursor_pos]
+        # TODO: binary operators; * probably needs special care
         match = re.search(r'[\s\.\,\(,\"]', until_cursor[::-1])
         if match:
             token_start = len(until_cursor)-match.end()+1
