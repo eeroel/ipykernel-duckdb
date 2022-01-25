@@ -4,7 +4,7 @@ import duckdb
 import sys
 
 from typing import Optional, Any
-
+from types import SimpleNamespace
 
 def has_open_quotes(s):
     if s.count('"""') % 2:
@@ -42,7 +42,7 @@ def looks_like_sql(code):
 def get_sql_matches(tables_and_columns, code, cursor_pos):
         """
         TODO: unit tests
-        - quote handling: select a.This_ should complete to a."This is a column"
+        - quote handling: select foo.This_ should complete to foo."This is a column"
         - table name should always be in the suggestion, but prefix added only if user wrote it
         - alternatively: table name in suggestion if more than 1 table referenceds
         """
@@ -61,15 +61,41 @@ def get_sql_matches(tables_and_columns, code, cursor_pos):
                 table_name = quote_name(tbl)
                 if not out.get(table_name):
                     out[table_name] = {"columns": []}
-                
-                out[table_name]["columns"].append(quote_name(col))
-                out[table_name]["columns"].append(table_name + '.' + quote_name(col))
+                name_quoted = quote_name(col)
+
+                # TODO: deduplication key should consider aliases as well
+                # + for aliases we never want the non-prefixed column name
+                out[table_name]["columns"].append(SimpleNamespace(text=name_quoted, key=tbl+col))
+                out[table_name]["columns"].append(SimpleNamespace(text=table_name + '.' + name_quoted, key=tbl+col))
             
             return out
         
+        tblnames = [x[0] for x in tables_and_columns]
+
+        # find all tables used so far in the query
+        # only match if we're not a subset of another table
+        table_re = lambda x: r'(^|[^a-zA-Z_]){}(\s+(as|AS))?(?P<alias>\s+\w+)?([^a-zA-Z_]|$)'.format(re.escape(x))
+        # table references + aliases
+        referred_tables = []
+        tables_and_columns_with_aliases = tables_and_columns
+        for x in tblnames:
+            match = re.search(table_re(x), code)
+            if match:
+                referred_tables.append(x)
+                # if we find an alias, add it to the tables as well
+                alias = match.group("alias")
+                if alias:
+                    alias=alias.strip()
+                    if alias.lower() in ['join', 'inner', 'left', 'right', 'full', 'self', 'union']:
+                        continue
+                    for tbl, col in tables_and_columns:
+                        if tbl==x:
+                            tables_and_columns_with_aliases.append((alias, col))
+                    referred_tables.append(alias)
+
         # 1. just return the tables
-        tables = generate_tables(tables_and_columns)
-        table_names = list(tables.keys())
+        tables = generate_tables(tables_and_columns_with_aliases)
+        table_names = [SimpleNamespace(text=x, key=x) for x in list(tables.keys())]
         matches=table_names
 
         # 2. if in a token, get match for token instead
@@ -85,28 +111,31 @@ def get_sql_matches(tables_and_columns, code, cursor_pos):
             token = code[token_start:cursor_pos]
             r = f"^{re.escape(token)}"
 
-            # find all tables used so far in the query
-            # only match if we're not a subset of another table
-            table_re = lambda x: r'(^|[^a-zA-Z_]){}([^a-zA-Z_]|$)'.format(re.escape(x))
-            referred_tables = [x for x in table_names if re.search(table_re(x), code)]
-
+            # recommend only columns from the found tables
             filtered_columns = [x for y in tables for x in tables[y]["columns"] if y in referred_tables]
             
             # first recommend column, then table
-            if len(r)>0 and (code[token_start-1] == ',' or len(referred_tables)>0):
+            if len(r)>0:
                 # only columns (TODO: note this assumes no schema.foo.bar syntax)
                 # TODO: we need to quote always, or when necessary(spaces in names etc.)
-                matches = [x for x in filtered_columns + table_names if re.match(r, x)]
+                matches = [x for x in filtered_columns + table_names if re.match(r, x.text)]
             # otherwise recommend all tables first
             else:
-                matches = [x for x in table_names + filtered_columns if re.match(r, x)]
+                matches = [x for x in table_names + filtered_columns if re.match(r, x.text)]
             
             # quoting:
             # - if we're in a quote, always add end quote
-            if code[token_start-1] == '"':
-                matches = [x+'"' for x in matches]
-
-        return matches, token_length
+            #if code[token_start-1] == '"':
+            #    matches = [x+'"' for x in deduped]
+        
+        deduped = []
+        keys = set()
+        for item in matches:
+            if item.key not in keys:
+                keys.add(item.key)
+                deduped.append(item.text)
+        
+        return deduped, token_length
 
 
 class IPythonDuckdbKernel(IPythonKernel):
