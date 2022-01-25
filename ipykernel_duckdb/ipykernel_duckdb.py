@@ -88,6 +88,10 @@ class IPythonDuckdbKernel(IPythonKernel):
         col_table = self.col_table
 
         def generate_tables(df):
+            """
+            generate {table: {columns: ...}} hierarchy, with all variations of
+            column names included (i.e. with and without table prefix)
+            """
             # pre-quote names if necessary
             quotable_chars_re = r'[\s\.\(\)\]\]]'
             out = {}
@@ -97,9 +101,9 @@ class IPythonDuckdbKernel(IPythonKernel):
                 table_name = quote_name(row.table_name)
                 if not out.get(table_name):
                     out[table_name] = {"columns": []}
-                else:
-                    out[table_name]["columns"].append(quote_name(row.column_name))
-                    out[table_name]["columns"].append(table_name + '.' + quote_name(row.column_name))
+                
+                out[table_name]["columns"].append(quote_name(row.column_name))
+                out[table_name]["columns"].append(table_name + '.' + quote_name(row.column_name))
             
             return out
         
