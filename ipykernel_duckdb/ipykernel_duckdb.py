@@ -84,7 +84,12 @@ class IPythonDuckdbKernel(IPythonKernel):
             return False
 
     def get_sql_matches(self, code, cursor_pos):
-        # TODO: take this as dict
+        """
+        TODO: unit tests
+        - quote handling: select a.This_ should complete to a."This is a column"
+        - table name should always be in the suggestion, but prefix added only if user wrote it
+        """
+        # TODO: take this as dict/tuples
         col_table = self.col_table
 
         def generate_tables(df):
