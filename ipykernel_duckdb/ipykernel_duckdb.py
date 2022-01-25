@@ -39,58 +39,13 @@ def looks_like_sql(code):
     return lowered.startswith("select") or lowered.startswith("with")
 
 
-class IPythonDuckdbKernel(IPythonKernel):
-    db = None
-
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-    def detect_sql(self, code, cursor_pos):
-        open_quote_char = has_open_quotes(code[:cursor_pos])
-        if open_quote_char:
-            after_last_quote = re.split(re.escape(open_quote_char), code[:cursor_pos])[-1]
-        if open_quote_char and looks_like_sql(after_last_quote):
-            return True
-
-    def update_db(self):
-        """
-        Find duckdb database from user namespace
-        """
-        # TODO: for performance etc, we could first check if our current db
-        # still exists and is open, instead of going through all
-        self.db = None
-        
-        for v in self.shell.user_ns.keys():
-            if isinstance(self.shell.user_ns[v], duckdb.DuckDBPyConnection):
-                # check it's open as well
-                # NOTE: if the user has two db variables, one closed and one open, we
-                # may not pick up the open one
-                # TODO: any better way to check openness?
-                try:
-                    self.shell.user_ns[v].query("select 1")  # this should fail only if closed
-                    self.db = self.shell.user_ns[v]
-                except RuntimeError:
-                    self.db = None
-                    return False
-
-        if self.db:
-            # set up helper table
-            # TODO: don't use pandas here, as python containers will do
-            self.col_table = self.db.query("select t.table_name, c.column_name from INFORMATION_SCHEMA.tables t join INFORMATION_SCHEMA.columns c on t.table_name=c.table_name").df()
-            return True
-        else:
-            self.db = None
-            # No db, should fall back to ipython
-            return False
-
-    def get_sql_matches(self, code, cursor_pos):
+def get_sql_matches(tables_and_columns, code, cursor_pos):
         """
         TODO: unit tests
         - quote handling: select a.This_ should complete to a."This is a column"
         - table name should always be in the suggestion, but prefix added only if user wrote it
+        - alternatively: table name in suggestion if more than 1 table referenceds
         """
-        # TODO: take this as dict/tuples
-        col_table = self.col_table
 
         def generate_tables(df):
             """
@@ -102,18 +57,18 @@ class IPythonDuckdbKernel(IPythonKernel):
             out = {}
             
             quote_name = lambda x: f'"{x}"' if re.search(quotable_chars_re, x) else x
-            for row in df.itertuples(index=False):
-                table_name = quote_name(row.table_name)
+            for tbl, col in tables_and_columns:
+                table_name = quote_name(tbl)
                 if not out.get(table_name):
                     out[table_name] = {"columns": []}
                 
-                out[table_name]["columns"].append(quote_name(row.column_name))
-                out[table_name]["columns"].append(table_name + '.' + quote_name(row.column_name))
+                out[table_name]["columns"].append(quote_name(col))
+                out[table_name]["columns"].append(table_name + '.' + quote_name(col))
             
             return out
         
         # 1. just return the tables
-        tables = generate_tables(col_table)
+        tables = generate_tables(tables_and_columns)
         table_names = list(tables.keys())
         matches=table_names
 
@@ -155,6 +110,55 @@ class IPythonDuckdbKernel(IPythonKernel):
                 matches = [x+'"' for x in matches]
 
         return matches, token_length
+
+
+class IPythonDuckdbKernel(IPythonKernel):
+    db = None
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def detect_sql(self, code, cursor_pos):
+        open_quote_char = has_open_quotes(code[:cursor_pos])
+        if open_quote_char:
+            after_last_quote = re.split(re.escape(open_quote_char), code[:cursor_pos])[-1]
+        if open_quote_char and looks_like_sql(after_last_quote):
+            return True
+
+    def update_db(self):
+        """
+        Find duckdb database from user namespace
+        """
+        # TODO: for performance etc, we could first check if our current db
+        # still exists and is open, instead of going through all
+        self.db = None
+        
+        for v in self.shell.user_ns.keys():
+            if isinstance(self.shell.user_ns[v], duckdb.DuckDBPyConnection):
+                # check it's open as well
+                # NOTE: if the user has two db variables, one closed and one open, we
+                # may not pick up the open one
+                # TODO: any better way to check openness?
+                try:
+                    self.shell.user_ns[v].query("select 1")  # this should fail only if closed
+                    self.db = self.shell.user_ns[v]
+                except RuntimeError:
+                    self.db = None
+                    return False
+
+        if self.db:
+            # set up helper table
+            # TODO: don't use pandas here, as python containers will do
+            self.tables_and_columns = self.db.query("""
+                select t.table_name, c.column_name
+                from INFORMATION_SCHEMA.tables t
+                join INFORMATION_SCHEMA.columns c on t.table_name=c.table_name
+            """).fetchall()
+            return True
+        else:
+            self.db = None
+            # No db, should fall back to ipython
+            return False
     
 
     def do_complete(self, code, cursor_pos):
@@ -162,7 +166,7 @@ class IPythonDuckdbKernel(IPythonKernel):
         ipython completion but switching to sql when detected
         """
         if self.update_db() and self.detect_sql(code, cursor_pos):
-            matches, cursor_offset = self.get_sql_matches(code, cursor_pos)
+            matches, cursor_offset = get_sql_matches(self.tables_and_columns, code, cursor_pos)
 
             out = {
             'status': 'ok',
