@@ -4,7 +4,7 @@ import duckdb
 import sys
 
 from typing import Optional, Any
-
+from types import SimpleNamespace
 
 def has_open_quotes(s):
     if s.count('"""') % 2:
@@ -37,6 +37,105 @@ def looks_like_sql(code):
     """
     lowered = code.lower().strip()
     return lowered.startswith("select") or lowered.startswith("with")
+
+
+def get_sql_matches(tables_and_columns, code, cursor_pos):
+        """
+        TODO: unit tests
+        - quote handling: select foo.This_ should complete to foo."This is a column"
+        - table name should always be in the suggestion, but prefix added only if user wrote it
+        - alternatively: table name in suggestion if more than 1 table referenceds
+        """
+
+        def generate_tables(df):
+            """
+            generate {table: {columns: ...}} hierarchy, with all variations of
+            column names included (i.e. with and without table prefix)
+            """
+            # pre-quote names if necessary
+            quotable_chars_re = r'[\s\.\(\)\]\]]'
+            out = {}
+            
+            quote_name = lambda x: f'"{x}"' if re.search(quotable_chars_re, x) else x
+            for tbl, col in tables_and_columns:
+                table_name = quote_name(tbl)
+                if not out.get(table_name):
+                    out[table_name] = {"columns": []}
+                name_quoted = quote_name(col)
+
+                # TODO: deduplication key should consider aliases as well
+                # + for aliases we never want the non-prefixed column name
+                out[table_name]["columns"].append(SimpleNamespace(text=name_quoted, key=tbl+col))
+                out[table_name]["columns"].append(SimpleNamespace(text=table_name + '.' + name_quoted, key=tbl+col))
+            
+            return out
+        
+        tblnames = [x[0] for x in tables_and_columns]
+
+        # find all tables used so far in the query
+        # only match if we're not a subset of another table
+        table_re = lambda x: r'(^|[^a-zA-Z_]){}(\s+(as|AS))?(?P<alias>\s+\w+)?([^a-zA-Z_]|$)'.format(re.escape(x))
+        # table references + aliases
+        referred_tables = []
+        tables_and_columns_with_aliases = tables_and_columns
+        for x in tblnames:
+            match = re.search(table_re(x), code)
+            if match:
+                referred_tables.append(x)
+                # if we find an alias, add it to the tables as well
+                alias = match.group("alias")
+                if alias:
+                    alias=alias.strip()
+                    if alias.lower() in ['join', 'inner', 'left', 'right', 'full', 'self', 'union']:
+                        continue
+                    for tbl, col in tables_and_columns:
+                        if tbl==x:
+                            tables_and_columns_with_aliases.append((alias, col))
+                    referred_tables.append(alias)
+
+        # 1. just return the tables
+        tables = generate_tables(tables_and_columns_with_aliases)
+        table_names = [SimpleNamespace(text=x, key=x) for x in list(tables.keys())]
+        matches=table_names
+
+        # 2. if in a token, get match for token instead
+        token_length=0
+        
+        # find previous whitespace, comma, quote or open parenthesis
+        until_cursor = code[:cursor_pos]
+        # TODO: binary operators; * probably needs special care
+        match = re.search(r'[\s\,\(,\"]', until_cursor[::-1])
+        if match:
+            token_start = len(until_cursor)-match.end()+1
+            token_length = cursor_pos-token_start
+            token = code[token_start:cursor_pos]
+            r = f"^{re.escape(token)}"
+
+            # recommend only columns from the found tables
+            filtered_columns = [x for y in tables for x in tables[y]["columns"] if y in referred_tables]
+            
+            # first recommend column, then table
+            if len(r)>0:
+                # only columns (TODO: note this assumes no schema.foo.bar syntax)
+                # TODO: we need to quote always, or when necessary(spaces in names etc.)
+                matches = [x for x in filtered_columns + table_names if re.match(r, x.text)]
+            # otherwise recommend all tables first
+            else:
+                matches = [x for x in table_names + filtered_columns if re.match(r, x.text)]
+            
+            # quoting:
+            # - if we're in a quote, always add end quote
+            #if code[token_start-1] == '"':
+            #    matches = [x+'"' for x in deduped]
+        
+        deduped = []
+        keys = set()
+        for item in matches:
+            if item.key not in keys:
+                keys.add(item.key)
+                deduped.append(item.text)
+        
+        return deduped, token_length
 
 
 class IPythonDuckdbKernel(IPythonKernel):
@@ -76,57 +175,16 @@ class IPythonDuckdbKernel(IPythonKernel):
         if self.db:
             # set up helper table
             # TODO: don't use pandas here, as python containers will do
-            self.col_table = self.db.query("select t.table_name, c.column_name from INFORMATION_SCHEMA.tables t join INFORMATION_SCHEMA.columns c on t.table_name=c.table_name").df()
+            self.tables_and_columns = self.db.query("""
+                select t.table_name, c.column_name
+                from INFORMATION_SCHEMA.tables t
+                join INFORMATION_SCHEMA.columns c on t.table_name=c.table_name
+            """).fetchall()
             return True
         else:
             self.db = None
             # No db, should fall back to ipython
             return False
-
-    def get_sql_matches(self, code, cursor_pos):
-        # TODO: spec this so that the matching function is more modular?
-        # - it's really just a hierarchy of schema.table.column <- work with that!
-        col_table = self.col_table
-
-        # 1. just return the tables
-        tables = list(col_table.table_name.unique())
-        matches=tables
-
-        # 2. if in a token, get match for token instead
-        token_length=0
-        
-        # find previous whitespace, period, comma, quote or open parenthesis
-        until_cursor = code[:cursor_pos]
-        match = re.search(r'[\s\.\,\(,\"]', until_cursor[::-1])
-        if match:
-            token_start = len(until_cursor)-match.end()+1
-            token_length = cursor_pos-token_start
-            token = code[token_start:cursor_pos]
-            r = f"^{re.escape(token)}"
-
-            # TODO: handle aliases
-            # so the table is determined when we have `.`
-            referred_tables = [x for x in tables if x in code]
-            filtered_columns = list(col_table.loc[lambda x: x.table_name.isin(referred_tables)].column_name.unique())
-            
-            # first recommend column, then table
-            if len(r)>0 and (code[token_start-1] in '.,' or len(referred_tables)>0):
-                # only columns (TODO: note this assumes no schema.foo.bar syntax)
-                # TODO: we need to quote always, or when necessary(spaces in names etc.)
-                matches = [x for x in filtered_columns + tables if re.match(r, x)]
-            # otherwise recommend all tables first
-            else:
-                matches = [x for x in tables + filtered_columns if re.match(r, x)]
-            
-            # quoting:
-            # - if we're in a quote, always add end quote
-            # - otherwise if column name has non-alphanumeric characters, wrap in quotes
-            if code[token_start-1] == '"':
-                matches = [x+'"' for x in matches]
-            else:
-                quotable_chars_re = r'[\s\.\(\)\]\]]'
-                matches = [f'"{x}"' if re.search(quotable_chars_re, x) else x for x in matches]
-        return matches, token_length
     
 
     def do_complete(self, code, cursor_pos):
@@ -134,7 +192,7 @@ class IPythonDuckdbKernel(IPythonKernel):
         ipython completion but switching to sql when detected
         """
         if self.update_db() and self.detect_sql(code, cursor_pos):
-            matches, cursor_offset = self.get_sql_matches(code, cursor_pos)
+            matches, cursor_offset = get_sql_matches(self.tables_and_columns, code, cursor_pos)
 
             out = {
             'status': 'ok',
