@@ -75,19 +75,16 @@ def get_sql_matches(tables_and_columns, code, cursor_pos):
         # 2. if in a token, get match for token instead
         token_length=0
         
-        # find previous whitespace, period, comma, quote or open parenthesis
+        # find previous whitespace, comma, quote or open parenthesis
         until_cursor = code[:cursor_pos]
         # TODO: binary operators; * probably needs special care
-        match = re.search(r'[\s\.\,\(,\"]', until_cursor[::-1])
+        match = re.search(r'[\s\,\(,\"]', until_cursor[::-1])
         if match:
             token_start = len(until_cursor)-match.end()+1
             token_length = cursor_pos-token_start
             token = code[token_start:cursor_pos]
             r = f"^{re.escape(token)}"
 
-            # TODO: handle aliases
-            # so the table is determined when we have `.`
-            
             # find all tables used so far in the query
             # only match if we're not a subset of another table
             table_re = lambda x: r'(^|[^a-zA-Z_]){}([^a-zA-Z_]|$)'.format(re.escape(x))
@@ -96,7 +93,7 @@ def get_sql_matches(tables_and_columns, code, cursor_pos):
             filtered_columns = [x for y in tables for x in tables[y]["columns"] if y in referred_tables]
             
             # first recommend column, then table
-            if len(r)>0 and (code[token_start-1] in '.,' or len(referred_tables)>0):
+            if len(r)>0 and (code[token_start-1] == ',' or len(referred_tables)>0):
                 # only columns (TODO: note this assumes no schema.foo.bar syntax)
                 # TODO: we need to quote always, or when necessary(spaces in names etc.)
                 matches = [x for x in filtered_columns + table_names if re.match(r, x)]
