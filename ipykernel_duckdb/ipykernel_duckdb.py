@@ -39,6 +39,30 @@ def looks_like_sql(code):
     return lowered.startswith("select") or lowered.startswith("with")
 
 
+def generate_tables(tables_and_columns):
+    """
+    generate {table: {columns: ...}} hierarchy, with all variations of
+    column names included (i.e. with and without table prefix)
+    """
+    # pre-quote names if necessary
+    quotable_chars_re = r'[\s\.\(\)\]\]]'
+    out = {}
+    
+    quote_name = lambda x: f'"{x}"' if re.search(quotable_chars_re, x) else x
+    for tbl, col in tables_and_columns:
+        table_name = quote_name(tbl)
+        if not out.get(table_name):
+            out[table_name] = {"columns": []}
+        name_quoted = quote_name(col)
+
+        # TODO: deduplication key should consider aliases as well
+        # + for aliases we never want the non-prefixed column name
+        out[table_name]["columns"].append(SimpleNamespace(text=name_quoted, key=tbl+col))
+        out[table_name]["columns"].append(SimpleNamespace(text=table_name + '.' + name_quoted, key=tbl+col))
+    
+    return out
+
+
 def get_sql_matches(tables_and_columns, code, cursor_pos):
         """
         TODO: unit tests
@@ -46,29 +70,6 @@ def get_sql_matches(tables_and_columns, code, cursor_pos):
         - table name should always be in the suggestion, but prefix added only if user wrote it
         - alternatively: table name in suggestion if more than 1 table referenceds
         """
-
-        def generate_tables(df):
-            """
-            generate {table: {columns: ...}} hierarchy, with all variations of
-            column names included (i.e. with and without table prefix)
-            """
-            # pre-quote names if necessary
-            quotable_chars_re = r'[\s\.\(\)\]\]]'
-            out = {}
-            
-            quote_name = lambda x: f'"{x}"' if re.search(quotable_chars_re, x) else x
-            for tbl, col in tables_and_columns:
-                table_name = quote_name(tbl)
-                if not out.get(table_name):
-                    out[table_name] = {"columns": []}
-                name_quoted = quote_name(col)
-
-                # TODO: deduplication key should consider aliases as well
-                # + for aliases we never want the non-prefixed column name
-                out[table_name]["columns"].append(SimpleNamespace(text=name_quoted, key=tbl+col))
-                out[table_name]["columns"].append(SimpleNamespace(text=table_name + '.' + name_quoted, key=tbl+col))
-            
-            return out
         
         tblnames = [x[0] for x in tables_and_columns]
 
