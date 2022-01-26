@@ -174,7 +174,6 @@ class IPythonDuckdbKernel(IPythonKernel):
 
         if self.db:
             # set up helper table
-            # TODO: don't use pandas here, as python containers will do
             self.tables_and_columns = self.db.query("""
                 select t.table_name, c.column_name
                 from INFORMATION_SCHEMA.tables t
@@ -212,8 +211,9 @@ class IPythonDuckdbKernel(IPythonKernel):
         ipython execution but sql in special cases
         """
         # this preprocessing extracts the sql part we can then pass to duckdb
-        # TODO: remove Python comment lines as part of this
-        sql_code = code.strip().strip("'").strip('"').strip()
+        # first remove comment lines (this leaves newlines but should be ok)
+        without_comments = re.sub(r'^\s*#.*$', '', code, flags=re.MULTILINE)
+        sql_code = without_comments.strip().strip("'").strip('"').strip()
         
         # NOTE: as a design choice, we require the SQL code to be a string literal
         # => this way any code executed is also valid python code
@@ -314,8 +314,7 @@ def main():
     - Autocompletion of table and column names
     - Helper syntax for querying the database with SQL only
     - Python and sql autocompletion where appropriate
-    - TODO: Autocompletion improvements: table + table alias, schema detection, keywords (SELECT * FROM duckdb_keywords() in a future version)
-    - TODO: remove any comment lines as the first thing (for code cell support etc.)
+    - TODO: Autocompletion improvements: schema detection, keywords (SELECT * FROM duckdb_keywords() in a future version)
     """
     from ipykernel.kernelapp import IPKernelApp
     IPKernelApp.launch_instance(kernel_class=IPythonDuckdbKernel)
