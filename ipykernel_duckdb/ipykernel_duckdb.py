@@ -156,8 +156,6 @@ class IPythonDuckdbKernel(IPythonKernel):
         """
         Find duckdb database from user namespace
         """
-        # TODO: for performance etc, we could first check if our current db
-        # still exists and is open, instead of going through all
         self.db = None
         
         for v in self.shell.user_ns.keys():
@@ -165,7 +163,6 @@ class IPythonDuckdbKernel(IPythonKernel):
                 # check it's open as well
                 # NOTE: if the user has two db variables, one closed and one open, we
                 # may not pick up the open one
-                # TODO: any better way to check openness?
                 try:
                     self.shell.user_ns[v].query("select 1")  # this should fail only if closed
                     self.db = self.shell.user_ns[v]
@@ -315,7 +312,6 @@ def main():
     - Autocompletion of table and column names
     - Helper syntax for querying the database with SQL only
     - Python and sql autocompletion where appropriate
-    - TODO: Autocompletion improvements: schema detection, keywords (SELECT * FROM duckdb_keywords() in a future version)
     """
     from ipykernel.kernelapp import IPKernelApp
     IPKernelApp.launch_instance(kernel_class=IPythonDuckdbKernel)
