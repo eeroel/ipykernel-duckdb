@@ -12,6 +12,6 @@ pip install .
 This will install the Python module and configure a Jupyter kernel `ipykernel_duckdb`.
 
 ## Known issues
-* Also in Visual Studio Code, to get the most of autocompletion, you may want to tweak the setting "jupyter.pythonCompletionTriggerCharacters".
+* In Visual Studio Code, to get the most of autocompletion, you may want to tweak the setting "jupyter.pythonCompletionTriggerCharacters".
 In IPython and JupyterLab the completion is suggested when you press TAB, but in VSCode it's character-based. Adding space (" ") to the list of characters works,
 but you will end up with a lot of suggestions.
