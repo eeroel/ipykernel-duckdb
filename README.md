@@ -1,6 +1,6 @@
 # ipykernel-duckdb
 
-A wrapper of IPykernel that is aware of a duckdb connection and provides
+A wrapper of IPykernel that is aware of a DuckDB connection and provides
 * Autocompletion of table and column names
 * Magics `%sql`, `%%sql` for querying the database
 
