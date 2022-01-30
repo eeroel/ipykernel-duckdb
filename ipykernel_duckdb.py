@@ -1,10 +1,35 @@
 from ipykernel.ipkernel import IPythonKernel
+
+from IPython.core.magic import needs_local_scope
+
 import re
 import duckdb
-import sys
 
-from typing import Optional, Any
 from types import SimpleNamespace
+
+
+@needs_local_scope
+def sql(line, cell=None, local_ns={}):
+    sql_code = cell if cell is not None else line
+
+    db = get_duckdb_from_local_namespace(local_ns)
+    if db is not None:
+        output_table = db.query(sql_code).df()
+        return output_table
+
+def get_duckdb_from_local_namespace(local_ns):
+    for v in local_ns.keys():    
+        if isinstance(local_ns[v], duckdb.DuckDBPyConnection):
+            # check it's open as well
+            # NOTE: if the user has two db variables, one closed and one open, we
+            # may not pick up the open one
+            try:
+                local_ns[v].query("select 1")  # this should fail only if closed
+                return local_ns[v]
+            except RuntimeError:
+                return None
+    return None
+
 
 def has_open_quotes(s):
     if s.count('"""') % 2:
@@ -17,19 +42,6 @@ def has_open_quotes(s):
     else:
         return False
 
-
-def is_string_block(code):
-    import ast
-    # TODO: is there a better way to do this?
-    try:
-        literal = ast.literal_eval(code)
-        if isinstance(literal, str):
-            return True
-    
-    except Exception:
-        return False
-
-    return 
 
 def looks_like_sql(code):
     """
@@ -149,26 +161,21 @@ class IPythonDuckdbKernel(IPythonKernel):
         open_quote_char = has_open_quotes(code[:cursor_pos])
         if open_quote_char:
             after_last_quote = re.split(re.escape(open_quote_char), code[:cursor_pos])[-1]
-        if open_quote_char and looks_like_sql(after_last_quote):
-            return True
+            if looks_like_sql(after_last_quote):
+                return True
+
+        # sql magic
+        elif '%sql' in code:
+            after_magic = re.split(r'\%sql', code[:cursor_pos])[-1]
+            if looks_like_sql(after_magic):
+                return True
 
     def update_db(self):
         """
         Find duckdb database from user namespace
         """
         self.db = None
-        
-        for v in self.shell.user_ns.keys():
-            if isinstance(self.shell.user_ns[v], duckdb.DuckDBPyConnection):
-                # check it's open as well
-                # NOTE: if the user has two db variables, one closed and one open, we
-                # may not pick up the open one
-                try:
-                    self.shell.user_ns[v].query("select 1")  # this should fail only if closed
-                    self.db = self.shell.user_ns[v]
-                except RuntimeError:
-                    self.db = None
-                    return False
+        self.db = get_duckdb_from_local_namespace(self.shell.user_ns)
 
         if self.db:
             # set up helper table
@@ -204,117 +211,17 @@ class IPythonDuckdbKernel(IPythonKernel):
         return out
 
 
-    async def do_execute(self, code, silent, store_history=True, user_expressions=None, allow_stdin=False):
-        """
-        ipython execution but sql in special cases
-        """
-        # this preprocessing extracts the sql part we can then pass to duckdb
-        # first remove comment lines (this leaves newlines but should be ok)
-        without_comments = re.sub(r'^\s*#.*$', '', code, flags=re.MULTILINE)
-        sql_code = without_comments.strip().strip("'").strip('"').strip()
-        
-        # NOTE: as a design choice, we require the SQL code to be a string literal
-        # => this way any code executed is also valid python code
-        if self.update_db() and \
-            (is_string_block(code) and looks_like_sql(sql_code)):
-            return await self.do_execute_sql(sql_code, code, silent, store_history, user_expressions, allow_stdin)
-        else:
-            return await super().do_execute(code, silent, store_history, user_expressions, allow_stdin)
-    
-    
-    async def do_execute_sql(self, sql_code, code, silent, store_history=True, user_expressions=None, allow_stdin=False):
-        # Temporarily monkey patch the functionality of the ipython shell
-        # IPythonKernel's do_execute will handle async and also prepare the output dictionary
-        transform_cell_original = self.shell.transform_cell
-        run_cell_async_original = self.shell.run_cell_async
-
-        self.shell.run_cell_async = self.run_sql_cell
-        self.shell.transform_cell = lambda x: sql_code # we already extracted this, so should be ok
-
-        reply_content = await super().do_execute(code, silent, store_history, user_expressions, allow_stdin)
-
-        self.shell.run_cell_async = run_cell_async_original
-        self.shell.transform_cell = transform_cell_original
-        
-        return reply_content
-
-
-    async def run_sql_cell(
-        self,
-        raw_cell,
-        silent,
-        store_history=True,
-        shell_futures=True,
-        *,
-        transformed_cell: Optional[str] = None,
-        preprocessing_exc_tuple: Optional[Any] = None):
-        # Pre-execution code for the shell so history and display work correctly
-        from IPython.core.interactiveshell import ExecutionInfo
-        from IPython.core.interactiveshell import ExecutionResult
-
-        try:
-            info = ExecutionInfo(raw_cell, store_history, silent, shell_futures)
-            result = ExecutionResult(info)
-            if silent:
-                store_history = False
-            if store_history:
-                result.execution_count = self.shell.execution_count
-
-            self.shell.events.trigger('pre_execute')
-            if not silent:
-                self.shell.events.trigger('pre_run_cell', info)
-            
-            if store_history:
-                self.shell.history_manager.store_inputs(self.shell.execution_count, transformed_cell, raw_cell)
-            
-            self.shell.displayhook.exec_result = result
-            has_raised = False
-            try:
-                # Actually execute the sql
-                output_table = self.db.query(transformed_cell).df()
-
-                # Display         
-                self.shell.displayhook(output_table)
-            except Exception as e:
-                has_raised = True
-                self.shell.showtraceback()
-                result.error_before_exec = sys.exc_info()[1]
-            
-            # Post-execution code
-            self.shell.last_execution_succeeded = not has_raised
-            self.shell.last_execution_result = result
-            self.shell.displayhook.exec_result = None
-
-            if store_history:
-                self.shell.history_manager.store_output(self.shell.execution_count)
-                self.shell.execution_count += 1
-            
-            self.shell.events.trigger('post_execute')
-            if not silent:
-                self.shell.events.trigger('post_run_cell', result)
-        
-        except BaseException as e:
-            # TODO: why do we have to do this here in case of KeyboardInterrupt,
-            # but InteractiveShell doesn't ?
-            self.shell.execution_count += 1
-
-            info = ExecutionInfo(raw_cell, store_history, silent, shell_futures)
-            result = ExecutionResult(info)
-            result.error_in_exec = e
-            self.shell.showtraceback(running_compiled_code=True)
-
-        return result
-
-
 def main():
     """
     Launch a Data Science IPython kernel that detects and open duckdb connection and provides
-    - Autocompletion of table and column names
-    - Helper syntax for querying the database with SQL only
-    - Python and sql autocompletion where appropriate
+    - Autocompletion of table and column names when SQL is detected
+    - %sql, %%sql magics for quick queries
     """
     from ipykernel.kernelapp import IPKernelApp
-    IPKernelApp.launch_instance(kernel_class=IPythonDuckdbKernel)
+    app = IPKernelApp.instance(kernel_class=IPythonDuckdbKernel)
+    app.initialize()
+    app.kernel.shell.register_magic_function(sql, "line_cell", "sql")
+    app.start()
     return
 
 
