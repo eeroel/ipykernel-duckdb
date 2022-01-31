@@ -9,11 +9,6 @@ tables_and_columns = lambda: [
     ('books', 'name'),
 ]
 
-@pytest.mark.skip("not fixed yet")
-def test_col_with_space():
-    code = 'select a'
-    assert 'abra cadabra' in get_sql_matches(tables_and_columns(), code, len(code))
-
 def test_simple_col():
     code = 'select f_ from spells'
     assert 'foo' in get_sql_matches(tables_and_columns(), code.replace('_',''), code.find('_'))[0]
@@ -65,7 +60,6 @@ def test_select_multi_alias():
     assert 'id' in matches
     assert 'name' in matches
 
-
 def test_select_multi_alias_prefix():
     code = 'select b._ from spells s join books b on s.id = b.spell_id'
     matches = get_sql_matches(tables_and_columns(), code.replace('_',''), code.find('_'))[0]
@@ -79,3 +73,22 @@ def test_table_suggestion():
     assert 'spells' in get_sql_matches(tables_and_columns(), code.replace('_',''), code.find('_'))[0]
     assert 'books' in get_sql_matches(tables_and_columns(), code.replace('_',''), code.find('_'))[0]
 
+def test_col_with_space():
+    code = 'select a_ from spells'
+    matches = get_sql_matches(tables_and_columns(), code.replace('_',''), code.find('_'))[0]
+    assert '"abra cadabra"' in matches
+
+def test_col_with_space_quoted():
+    code = 'select "a_ from spells'
+    matches = get_sql_matches(tables_and_columns(), code.replace('_',''), code.find('_'))[0]
+    assert '"abra cadabra"' in matches
+
+def test_col_with_space_quoted_prefix():
+    code = 'select spells."a_ from spells'
+    matches = get_sql_matches(tables_and_columns(), code.replace('_',''), code.find('_'))[0]
+    assert 'spells."abra cadabra"' in matches
+
+def test_col_with_space_prefix():
+    code = 'select spells.a_ from spells'
+    matches = get_sql_matches(tables_and_columns(), code.replace('_',''), code.find('_'))[0]
+    assert 'spells."abra cadabra"' in matches
