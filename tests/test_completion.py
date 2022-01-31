@@ -82,3 +82,13 @@ def test_col_with_space_quoted():
     code = 'select "a_ from spells'
     matches = get_sql_matches(tables_and_columns(), code.replace('_',''), code.find('_'))[0]
     assert '"abra cadabra"' in matches
+
+def test_col_with_space_quoted_prefix():
+    code = 'select spells."a_ from spells'
+    matches = get_sql_matches(tables_and_columns(), code.replace('_',''), code.find('_'))[0]
+    assert 'spells."abra cadabra"' in matches
+
+def test_col_with_space_prefix():
+    code = 'select spells.a_ from spells'
+    matches = get_sql_matches(tables_and_columns(), code.replace('_',''), code.find('_'))[0]
+    assert 'spells."abra cadabra"' in matches
