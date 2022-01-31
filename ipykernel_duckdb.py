@@ -90,7 +90,7 @@ def get_sql_matches(tables_and_columns, code, cursor_pos):
     table_re = lambda x: r'(^|[^a-zA-Z_]){}(\s+(as|AS))?(?P<alias>\s+\w+)?([^a-zA-Z_]|$)'.format(re.escape(x))
     # table references + aliases
     referred_tables = []
-    tables_and_columns_with_aliases = tables_and_columns
+    tables_and_columns_with_aliases = [x for x in tables_and_columns]
     for x in tblnames:
         match = re.search(table_re(x), code)
         if match:
