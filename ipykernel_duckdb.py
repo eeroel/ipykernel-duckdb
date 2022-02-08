@@ -18,8 +18,8 @@ def sql(line, cell=None, local_ns={}):
         return output_table
 
 def get_duckdb_from_local_namespace(local_ns):
-    for v in local_ns.keys():    
-        if isinstance(local_ns[v], duckdb.DuckDBPyConnection):
+    for v in local_ns.keys():
+        if not v.startswith('_') and isinstance(local_ns[v], duckdb.DuckDBPyConnection):
             # check it's open as well
             # NOTE: if the user has two db variables, one closed and one open, we
             # may not pick up the open one
