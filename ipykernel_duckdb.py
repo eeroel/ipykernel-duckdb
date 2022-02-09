@@ -32,6 +32,8 @@ def get_duckdb_from_local_namespace(local_ns):
 
 
 def has_open_quotes(s):
+    # Modified from IPYthon.core.completer to handle single quotes
+    # within triple quotes
     if s.count('"""') % 2:
         return '"""'
     # if triple-quotes were matched, then we can detect single-quote mismatch like this
